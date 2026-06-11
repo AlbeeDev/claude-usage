@@ -369,6 +369,10 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False):
             time.sleep(300)  # every 5 minutes
             try:
                 cmd_scan(projects_dir=projects_dir)
+                from scanner import get_db, tag_untagged_sessions
+                conn = get_db()
+                tag_untagged_sessions(conn)
+                conn.close()
             except Exception:
                 pass
 

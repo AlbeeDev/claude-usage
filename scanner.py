@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 XCODE_PROJECTS_DIR = Path.home() / "Library" / "Developer" / "Xcode" / "CodingAssistant" / "ClaudeAgentConfig" / "projects"
 DB_PATH = Path.home() / ".claude" / "usage.db"
+CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 DEFAULT_PROJECTS_DIRS = [PROJECTS_DIR, XCODE_PROJECTS_DIR]
 
 # Higher number = higher priority when choosing a session's primary model
@@ -74,6 +75,12 @@ def init_db(conn):
             lines   INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS session_accounts (
+            session_id        TEXT PRIMARY KEY,
+            subscription_type TEXT,
+            rate_limit_tier   TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
         CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp);
         CREATE INDEX IF NOT EXISTS idx_sessions_first ON sessions(first_timestamp);
@@ -89,6 +96,35 @@ def init_db(conn):
         ON turns(message_id) WHERE message_id IS NOT NULL AND message_id != ''
     """)
     conn.commit()
+
+
+def get_active_account():
+    try:
+        with open(CREDENTIALS_PATH) as f:
+            creds = json.load(f)
+        oauth = creds.get("claudeAiOauth", {})
+        return {
+            "subscription_type": oauth.get("subscriptionType", "unknown"),
+            "rate_limit_tier":   oauth.get("rateLimitTier", "unknown"),
+        }
+    except Exception:
+        return {"subscription_type": "unknown", "rate_limit_tier": "unknown"}
+
+
+def tag_untagged_sessions(conn):
+    account = get_active_account()
+    if account["subscription_type"] == "unknown":
+        return
+    untagged = conn.execute("""
+        SELECT session_id FROM sessions
+        WHERE session_id NOT IN (SELECT session_id FROM session_accounts)
+    """).fetchall()
+    if untagged:
+        conn.executemany(
+            "INSERT OR IGNORE INTO session_accounts (session_id, subscription_type, rate_limit_tier) VALUES (?, ?, ?)",
+            [(r["session_id"], account["subscription_type"], account["rate_limit_tier"]) for r in untagged]
+        )
+        conn.commit()
 
 
 def project_name_from_cwd(cwd):

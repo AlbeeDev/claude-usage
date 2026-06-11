@@ -8,9 +8,32 @@ import sqlite3
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = Path.home() / ".claude" / "usage.db"
+CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+
+# Output token weights relative to Sonnet (based on output pricing ratios)
+_MODEL_WEIGHTS = {"haiku": 0.27, "sonnet": 1.0, "opus": 5.0}
+
+def _model_weight(model):
+    m = (model or "").lower()
+    for k, w in _MODEL_WEIGHTS.items():
+        if k in m:
+            return w
+    return 1.0
+
+def _read_active_account():
+    try:
+        with open(CREDENTIALS_PATH) as f:
+            creds = json.load(f)
+        oauth = creds.get("claudeAiOauth", {})
+        return {
+            "subscription_type": oauth.get("subscriptionType", "unknown"),
+            "rate_limit_tier":   oauth.get("rateLimitTier", "unknown"),
+        }
+    except Exception:
+        return {"subscription_type": "unknown", "rate_limit_tier": "unknown"}
 
 
 def get_dashboard_data(db_path=DB_PATH):
@@ -113,6 +136,19 @@ def get_dashboard_data(db_path=DB_PATH):
             "cache_creation": r["total_cache_creation"] or 0,
         })
 
+    # ── Usage last 5 hours (weighted by model cost) ──────────────────────────
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    turns_5h = conn.execute("""
+        SELECT COALESCE(NULLIF(model, ''), 'unknown') as model,
+               SUM(output_tokens) as output
+        FROM turns
+        WHERE timestamp >= ?
+        GROUP BY COALESCE(NULLIF(model, ''), 'unknown')
+    """, (cutoff,)).fetchall()
+
+    weighted_5h = sum((_model_weight(r["model"]) * (r["output"] or 0)) for r in turns_5h)
+    by_model_5h = [{"model": r["model"], "output": r["output"] or 0} for r in turns_5h]
+
     conn.close()
 
     return {
@@ -121,6 +157,11 @@ def get_dashboard_data(db_path=DB_PATH):
         "hourly_by_model": hourly_by_model,
         "sessions_all":    sessions_all,
         "generated_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "usage_5h": {
+            "weighted":    round(weighted_5h),
+            "by_model":    by_model_5h,
+            "account":     _read_active_account(),
+        },
     }
 
 
@@ -249,6 +290,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .show-more-link:hover { text-decoration: underline; }
 
   footer { border-top: 1px solid var(--border); padding: 20px 24px; margin-top: 8px; }
+  .usage-5h-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+  .usage-5h-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .usage-5h-header h2 { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; margin: 0; }
+  .usage-5h-note { font-size: 11px; color: var(--muted); margin-bottom: 18px; }
+  .account-badge { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 8px; }
+  .plan-row { margin-bottom: 18px; }
+  .plan-row:last-child { margin-bottom: 0; }
+  .plan-row-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .plan-name { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .plan-name.active { color: var(--text); }
+  .plan-weighted { font-size: 12px; color: var(--muted); }
+  .bar-track { position: relative; height: 10px; background: var(--raised); border-radius: 4px; }
+  .bar-fill { height: 100%; border-radius: 4px; background: var(--accent); opacity: 0.5; transition: width 0.4s ease; }
+  .plan-row.active .bar-fill { opacity: 1; }
+  .checkpoint { position: absolute; top: 0; height: 100%; }
+  .checkpoint-line { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--muted); opacity: 0.5; }
+  .checkpoint-labels { position: absolute; top: 14px; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+  .checkpoint-labels .ck-val { font-size: 10px; color: var(--muted); display: block; }
+  .checkpoint-labels .ck-desc { font-size: 10px; color: var(--muted); opacity: 0.6; display: block; }
   .footer-content { max-width: 1400px; margin: 0 auto; }
   .footer-content p { color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 4px; }
   .footer-content p:last-child { margin-bottom: 0; }
@@ -289,6 +349,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <div class="container">
   <div class="stats-row" id="stats-row"></div>
+  <div id="usage-5h-card"></div>
   <div class="charts-grid">
     <div class="chart-card wide">
       <h2 id="daily-chart-title">Daily Token Usage</h2>
@@ -885,6 +946,7 @@ function applyFilter() {
   document.getElementById('hourly-chart-title').textContent = 'Average Hourly Distribution \u2014 ' + RANGE_LABELS[selectedRange];
 
   renderStats(totals);
+  renderUsage5h(rawData && rawData.usage_5h);
   renderDailyChart(daily);
   renderHourlyChart(hourlyAgg);
   renderModelChart(byModel);
@@ -897,6 +959,63 @@ function applyFilter() {
   renderModelCostTable(lastByModel);
   renderProjectCostTable(lastByProject);
   renderProjectBranchCostTable(lastByProjectBranch);
+}
+
+// ── Usage 5h widget ────────────────────────────────────────────────────────
+function renderUsage5h(usage5h) {
+  const el = document.getElementById('usage-5h-card');
+  if (!usage5h) { el.innerHTML = ''; return; }
+
+  const weighted = usage5h.weighted;
+  const account  = usage5h.account || {};
+  const subType  = (account.subscription_type || 'unknown').toLowerCase();
+  const tier     = account.rate_limit_tier || '';
+
+  const PRO_CHECKPOINTS  = [{v:25000,d:'peak heavy'},{v:55000,d:'typical'},{v:88000,d:'off-peak'}];
+  const TEAM_CHECKPOINTS = PRO_CHECKPOINTS.map(c => ({v: Math.round(c.v * 1.25), d: c.d}));
+  const MAX_TOKENS = TEAM_CHECKPOINTS[2].v; // 110K — full bar width
+
+  function fmtK(n) { return n >= 1000 ? (n/1000).toFixed(0)+'K' : n; }
+
+  function barHtml(planKey, checkpoints, isActive) {
+    const fillPct = Math.min(100, (weighted / MAX_TOKENS) * 100).toFixed(1);
+    const cpHtml = checkpoints.map(c => {
+      const pct = ((c.v / MAX_TOKENS) * 100).toFixed(1);
+      return `<div class="checkpoint" style="left:${pct}%">
+        <div class="checkpoint-line"></div>
+        <div class="checkpoint-labels">
+          <span class="ck-val">~${fmtK(c.v)}</span>
+          <span class="ck-desc">${c.d}</span>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+      <div class="plan-row${isActive ? ' active' : ''}">
+        <div class="plan-row-header">
+          <span class="plan-name${isActive ? ' active' : ''}">${planKey.toUpperCase()}${isActive ? ' ★' : ''}</span>
+          <span class="plan-weighted">${fmtK(weighted)} weighted output tokens</span>
+        </div>
+        <div class="bar-track" style="margin-bottom:28px">
+          <div class="bar-fill" style="width:${fillPct}%"></div>
+          ${cpHtml}
+        </div>
+      </div>`;
+  }
+
+  const badgeLabel = subType !== 'unknown' ? `${subType}${tier ? ' · '+tier : ''}` : 'unknown plan';
+  const proActive  = subType === 'pro';
+  const teamActive = subType === 'team';
+
+  el.innerHTML = `
+    <div class="usage-5h-card">
+      <div class="usage-5h-header">
+        <h2>Usage — Last 5 Hours</h2>
+        <span class="account-badge">${esc(badgeLabel)}</span>
+      </div>
+      <div class="usage-5h-note">Weighted output tokens &nbsp;·&nbsp; Sonnet ×1 &nbsp;·&nbsp; Haiku ×0.27 &nbsp;·&nbsp; Opus ×5</div>
+      ${barHtml('Pro', PRO_CHECKPOINTS, proActive)}
+      ${barHtml('Team', TEAM_CHECKPOINTS, teamActive)}
+    </div>`;
 }
 
 // ── Renderers ──────────────────────────────────────────────────────────────
@@ -1501,6 +1620,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             data = get_dashboard_data()
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/health":
+            import os
+            if os.path.exists('/maintenance/claude-usage'):
+                body = b'{"status":"maintenance"}'
+                self.send_response(503)
+            else:
+                body = b'{"status":"ok"}'
+                self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
