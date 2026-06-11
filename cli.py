@@ -361,6 +361,19 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False):
     print("Running scan first...")
     cmd_scan(projects_dir=projects_dir)
 
+    import threading
+    import time
+
+    def _background_scan():
+        while True:
+            time.sleep(300)  # every 5 minutes
+            try:
+                cmd_scan(projects_dir=projects_dir)
+            except Exception:
+                pass
+
+    threading.Thread(target=_background_scan, daemon=True).start()
+
     print("\nStarting dashboard server...")
     from dashboard import serve
 
