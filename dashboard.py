@@ -971,9 +971,9 @@ function renderUsage5h(usage5h) {
   const subType  = (account.subscription_type || 'unknown').toLowerCase();
   const tier     = account.rate_limit_tier || '';
 
-  const PRO_CHECKPOINTS  = [{v:25000,d:'peak heavy'},{v:55000,d:'typical'},{v:88000,d:'off-peak'}];
-  const TEAM_CHECKPOINTS = PRO_CHECKPOINTS.map(c => ({v: Math.round(c.v * 1.25), d: c.d}));
-  const MAX_TOKENS = TEAM_CHECKPOINTS[2].v; // 110K — full bar width
+  const PRO_CHECKPOINTS  = [{v:25000,d:'peak heavy'},{v:55000,d:'typical'},{v:104000,d:'off-peak'}];
+  const TEAM_CHECKPOINTS = [{v:31000,d:'peak heavy'},{v:69000,d:'typical'},{v:130000,d:'off-peak'}];
+  const MAX_TOKENS = 150000; // bar width — slightly beyond Team off-peak ceiling
 
   function fmtK(n) { return n >= 1000 ? (n/1000).toFixed(0)+'K' : n; }
 
