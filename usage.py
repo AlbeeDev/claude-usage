@@ -338,6 +338,52 @@ def open_login_page():
             browser.close()
 
 
+def mcp_command():
+    """The interpreter and script Claude Code should run, as absolute paths.
+
+    The venv beside this file wins, for the same reason the wrappers prefer it:
+    an MCP client runs a command, it does not activate anything.
+    """
+    venv = HERE / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    python = venv if venv.exists() else Path(sys.executable)
+    # Absolute, but NOT resolved: .venv/bin/python is a symlink to the real
+    # interpreter, and following it discards the environment, which is the whole
+    # point of pointing at it. A venv is found relative to the binary's path.
+    return os.path.abspath(python), os.path.abspath(HERE / "mcp_server.py")
+
+
+def register_mcp():
+    """Register the MCP server with Claude Code, or say how to do it by hand."""
+    python, server = mcp_command()
+
+    claude = shutil.which("claude")
+    if claude is None:
+        print("Claude Code's `claude` command isn't on PATH, so add this to your\n"
+              "MCP client's config yourself:\n")
+        print(json.dumps({"mcpServers": {"claude-usage": {
+            "type": "stdio", "command": python, "args": [server]}}}, indent=2))
+        return 1
+
+    listed = subprocess.run([claude, "mcp", "list"], capture_output=True, text=True)
+    if "claude-usage" in listed.stdout:
+        print("claude-usage is already registered. To repoint it at this copy:\n")
+        print("  claude mcp remove claude-usage")
+        print("  usage --register-mcp")
+        return 1
+
+    done = subprocess.run(
+        [claude, "mcp", "add", "claude-usage", "--scope", "user", "--", python, server],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        print((done.stderr or done.stdout).strip())
+        return 1
+
+    print(f"Registered claude-usage for all your projects.\n"
+          f"  python: {python}\n  server: {server}\n\n"
+          "Start a new Claude session to pick it up.")
+    return 0
+
+
 def cli(argv):
     """The command-line front door.
 
@@ -346,6 +392,9 @@ def cli(argv):
     person right there, so a missing browser is worth starting rather than
     merely reporting. Guidance goes to stderr so stdout stays parseable JSON.
     """
+    if "--register-mcp" in argv:
+        return register_mcp()
+
     if "--login" in argv:
         try:
             open_login_page()

@@ -163,9 +163,19 @@ Either way the checker looks at `localhost:9222` and needs no configuring.
 **MCP** — register the server and any Claude session gets a `claude_usage` tool
 reporting `session_pct` and `resets_at`, so it can decide whether to keep going.
 
-Point `command` at the Python **inside your `.venv`**, not a bare `python3` —
-that is where the dependencies are, and the MCP client does not activate
-anything.
+If you use Claude Code, let it do this for you:
+
+```bash
+./usage --register-mcp
+```
+
+That works out the right interpreter and absolute paths, registers the server
+for all your projects, and tells you to start a new session. If `claude` isn't
+on your PATH — another MCP client, say — it prints the JSON to paste instead.
+
+To do it by hand, point `command` at the Python **inside your `.venv`**, not a
+bare `python3`: that is where the dependencies are, and an MCP client activates
+nothing, it just runs a command.
 
 **Linux, macOS**
 ```json
