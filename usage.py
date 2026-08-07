@@ -97,7 +97,10 @@ def start_browser():
         args.append("--no-sandbox")
     args.append("https://claude.ai/")
 
-    errlog = Path(tempfile.gettempdir()) / "claude-usage-browser.log"
+    # mkstemp, not a predictable name: on a shared machine anyone could
+    # pre-create a known path as a symlink and have this truncate whatever it
+    # points at, which as root is any file on the box.
+    errfd, errlog = tempfile.mkstemp(prefix="claude-usage-browser-", suffix=".log")
     kwargs = {"stdout": subprocess.DEVNULL}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -114,27 +117,34 @@ def start_browser():
     else:
         kwargs["start_new_session"] = True  # outlive this process
 
-    with open(errlog, "wb") as err:
-        proc = subprocess.Popen(args, stderr=err, **kwargs)
+    try:
+        with os.fdopen(errfd, "wb") as err:
+            proc = subprocess.Popen(args, stderr=err, **kwargs)
 
-    # Popen succeeding says only that the file was executable. Wait for the
-    # browser to actually offer a debugger before claiming it started.
-    deadline = time.time() + 30
-    while time.time() < deadline:
+        # Popen succeeding says only that the file was executable. Wait for the
+        # browser to actually offer a debugger before claiming it started.
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(f"{CDP}/json/version", timeout=2).close()
+                return exe
+            except Exception:
+                if proc.poll() is not None:
+                    break
+                time.sleep(1)
+
+        # Chrome is noisy, so its last line is a hint rather than the cause.
+        said = [ln for ln in Path(errlog).read_text(errors="replace").splitlines()
+                if ln.strip()]
+        detail = f"{exe} never offered a debugger on {CDP}"
+        if said:
+            detail += f"; last said: {said[-1]}"
+        raise Unavailable("browser_unavailable", detail)
+    finally:
         try:
-            urllib.request.urlopen(f"{CDP}/json/version", timeout=2).close()
-            return exe
-        except Exception:
-            if proc.poll() is not None:
-                break
-            time.sleep(1)
-
-    # Chrome is noisy, so its last line is a hint rather than the cause.
-    said = [ln for ln in errlog.read_text(errors="replace").splitlines() if ln.strip()]
-    detail = f"{exe} never offered a debugger on {CDP}"
-    if said:
-        detail += f"; last said: {said[-1]}"
-    raise Unavailable("browser_unavailable", detail)
+            os.unlink(errlog)
+        except OSError:
+            pass
 
 
 def ws_endpoint():
@@ -314,6 +324,7 @@ def read_usage():
             data = digest(fetch())
             data["source"] = "browser"
             CACHE.write_text(json.dumps({"ts": time.time(), "data": data}))
+            os.chmod(CACHE, 0o600)  # your usage and spend are nobody else's
             return data
         except Unavailable as e:
             return e.payload

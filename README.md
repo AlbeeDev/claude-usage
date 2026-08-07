@@ -100,8 +100,12 @@ python3 -m venv .venv
 
 > The Chromium image is about 4.6 GB. Check you have the disk.
 
-> All ports bind to `127.0.0.1`. Do not republish them on `0.0.0.0` — the UI has
-> no password and the browser behind it is signed into your account.
+> **Anything that can reach port 9222 controls a browser signed into your Claude
+> account** — it can read your conversations, act as you on any site that browser
+> is logged into, and take its cookies. There is no authentication on that port;
+> that is how the debug protocol works. All ports bind to `127.0.0.1` for this
+> reason. Do not republish them on `0.0.0.0`, and treat any machine where you do
+> not trust every local user as unsuitable.
 
 ### Put it on PATH
 
