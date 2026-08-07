@@ -5,8 +5,12 @@ name: claude-usage-mcp
 
 services:
   # Holds the login. You open its UI once, log in by hand, and leave it running.
-  # No password on that UI, so keep the ports off untrusted networks — bind them
-  # to 127.0.0.1 if this host shares a network you don't control.
+  #
+  # Everything binds to 127.0.0.1, because that UI has no password and the
+  # browser behind it is signed into your account. Published on 0.0.0.0 it would
+  # be reachable from the internet on any host with a public address, which is
+  # most of the machines this gets run on. Reach it from elsewhere with a tunnel:
+  #     ssh -L 3000:localhost:3000 you@host
   browser:
     image: lscr.io/linuxserver/chromium:latest
     container_name: claude-usage-browser
@@ -20,11 +24,11 @@ services:
     volumes:
       - browser-profile:/config
     ports:
-      - "3000:3000"   # the UI you log in through (HTTP, use from localhost)
-      - "3001:3001"   # same UI over HTTPS, for reaching it from another machine
+      - "127.0.0.1:3000:3000"   # the UI you log in through
+      - "127.0.0.1:3001:3001"   # the same UI over HTTPS, if you want it
       # 9222 on the host either way, so the checker needs no reconfiguring
       # whether the browser is this container or one you started yourself.
-      - "9222:9223"   # how usage.py talks to this browser, via the bridge below
+      - "127.0.0.1:9222:9223"   # how usage.py talks to this browser
     shm_size: "1gb"
     restart: unless-stopped
 
