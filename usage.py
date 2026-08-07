@@ -364,12 +364,17 @@ def register_mcp():
             "type": "stdio", "command": python, "args": [server]}}}, indent=2))
         return 1
 
+    # Replacing an existing entry is the whole point of running this again, and
+    # `claude mcp add` refuses to overwrite, so clear it first. Said out loud
+    # rather than done quietly, since it is someone else's config being edited.
     listed = subprocess.run([claude, "mcp", "list"], capture_output=True, text=True)
     if "claude-usage" in listed.stdout:
-        print("claude-usage is already registered. To repoint it at this copy:\n")
-        print("  claude mcp remove claude-usage")
-        print("  usage --register-mcp")
-        return 1
+        print("Replacing the existing claude-usage registration.")
+        gone = subprocess.run([claude, "mcp", "remove", "claude-usage"],
+                              capture_output=True, text=True)
+        if gone.returncode != 0:
+            print((gone.stderr or gone.stdout).strip())
+            return 1
 
     done = subprocess.run(
         [claude, "mcp", "add", "claude-usage", "--scope", "user", "--", python, server],
