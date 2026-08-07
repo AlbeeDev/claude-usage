@@ -146,14 +146,22 @@ claude.ai and log in. Then `./usage`.
 
 Either way the checker looks at `localhost:9222` and needs no configuring.
 
-> Reaching that UI from another machine needs HTTPS, because the page uses
-> browser features that plain HTTP won't allow off localhost. Port `3001` serves
-> the same screen over HTTPS with a self-signed certificate, or put it behind
-> something that terminates TLS properly.
+**Logging in on a server you are not sitting at.** Everything binds to
+`127.0.0.1`, so forward the port over SSH and open it locally:
 
-> Neither port is password-protected, and the browser is logged into your
-> account. On a shared or untrusted network, bind them to `127.0.0.1` in
-> `docker-compose.yml`.
+```bash
+ssh -L 3000:localhost:3000 you@your-server
+```
+
+Then <http://localhost:3000> in your own browser. Nothing to install, and your
+browser genuinely sees localhost, which the UI needs — it uses browser features
+that are refused over plain HTTP anywhere else. Port `3001` serves the same
+screen over HTTPS if you would rather put it behind a proxy, but that is a
+deliberate decision to make, not a default.
+
+> Do not republish these ports on `0.0.0.0` to save yourself the tunnel. The UI
+> has no password and the browser behind it is signed into your account, so on a
+> host with a public address that is an open, logged-in browser on the internet.
 
 ## Using it
 
