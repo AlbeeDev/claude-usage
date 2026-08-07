@@ -1,16 +1,19 @@
 # claude-usage-mcp
 
-Read your Claude plan usage — the numbers behind claude.ai's "Current session"
-and "Weekly" meters — from the CLI, or as an MCP tool.
+Read your Claude plan usage from the command line, or as an MCP tool.
+
+These are the numbers behind claude.ai's "Current session" and "Weekly" meters.
+Anthropic publishes no API for them, so this reads them through a browser you
+are logged into. See [How it works](#how-it-works).
 
 ```console
 $ ./usage
 {
   "status": "ok",
-  "session_pct": 17.0,
-  "session_resets_at": "2026-08-07T12:40:00Z",
-  "weekly_pct": 36.0,
-  "weekly_resets_at": "2026-08-08T06:59:59Z",
+  "session_pct": 14.0,
+  "session_resets_at": "2026-08-07T18:00:00Z",
+  "weekly_pct": 38.0,
+  "weekly_resets_at": "2026-08-08T07:00:00Z",
   "blocking": [],
   "credits_enabled": false,
   "credits_spent": 0.0,
@@ -19,80 +22,47 @@ $ ./usage
 }
 ```
 
-Useful for long unattended runs that should stop before hitting a limit rather
-than being killed mid-task, and for putting a usage meter in your own tools.
+## Features
 
-## How it works
+- CLI printing JSON, exit 0 on success and 1 on failure
+- MCP tool, so Claude can check its own remaining usage
+- Works on Windows, macOS and Linux
+- Docker optional — needed only on machines without a screen
+- No API key, no cookie extraction, no browser download
 
-Anthropic publishes no API for plan usage. The only source is the endpoint
-claude.ai's settings page calls, which needs your session — and Cloudflare
-rejects any client that isn't a real browser.
+## Requirements
 
-Cookies alone are not enough, which is worth knowing before you try the obvious
-shortcut: an HTTP client sending perfectly valid cookies still gets `403` with
-`cf-mitigated: challenge`, a freshly minted `__cf_bm` does not change that, and
-neither does replaying a complete browser header set. What is being
-fingerprinted is the client itself.
+- Python 3.9+
+- A browser (Chrome, Chromium or Edge), or Docker on a headless machine
+- A machine that stays on, since the browser has to keep running
+- One manual login, repeated roughly monthly when the session expires
 
-So you keep a browser logged in — one you start yourself, or the container in
-`docker-compose.yml` — and `usage.py` connects to that same browser and asks the
-question from inside a page, which is what the site's own settings modal does.
-Nothing copies cookies out, and no browser is launched behind your back.
+## Install
 
-**This reads your own account through your own logged-in session.** No API key,
-no token, nothing sanctioned — and therefore best-effort by nature. Don't build
-anything critical on top of it.
+```bash
+git clone https://github.com/AlbeeDev/claude-usage.git
+cd claude-usage
+```
 
-## What this costs you
+Then follow **A** if the machine has a screen, or **B** if it does not.
 
-A browser holding a login is not a zero-maintenance thing:
+### A. Machine with a screen
 
-- **A browser that keeps running**, logged into your account, on a machine that
-  stays on.
-- **One manual login**, by hand, in that browser.
-- **Logging in again roughly monthly**, when the session expires. This never
-  goes away.
-
-Windows, macOS and Linux all work. Docker is optional — see below.
-
-## Setup
-
-**Linux, macOS**
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+./usage
 ```
 
-**Windows**
+Windows:
+
 ```
 py -3 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
+usage
 ```
 
-You never have to activate it: `./usage` uses a `.venv` sitting next to it if
-there is one. Installing into your system Python instead works too, but most
-current Linux distributions refuse it — `pip` will say
-`error: externally-managed-environment` — so the virtual environment is the path
-that works everywhere.
-
-No browser download: `playwright` is used only to talk to a browser that is
-already running, so `playwright install` is not needed.
-
-Run it with `./usage` on Linux and macOS, or `usage` on Windows — small wrappers
-that work out what Python is called here, so you don't have to.
-
-Then pick whichever fits your machine.
-
-### Option A: on a machine with a screen
-
-No Docker involved. Just run it:
-
-```bash
-./usage           # Windows: usage
-```
-
-The first time, there is no browser yet, so it finds Chrome, Chromium or Edge
-and starts one for you:
+The first run finds a browser and starts one:
 
 ```console
 $ ./usage
@@ -103,89 +73,76 @@ Log into claude.ai in the window that opened, leave it running,
 then run this again.
 ```
 
-Log in there, then run it again and you get numbers. That is the whole setup.
+Log in, leave the window open, run `./usage` again.
 
-If no browser can be found or it fails to start, it says so and exits 1 — it
-won't claim success and leave you guessing.
+### B. Headless machine (Docker)
 
-**Leave that window running** — it is what holds the session. Minimise it, or
-park it on another desktop; it only has to exist. You can close it, and the
-login survives in `browser-profile/`, but then `./usage` has to start it again
-before it can read anything, which it does by itself.
-
-It leaves one claude.ai tab open and reuses it every run, so nothing opens,
-navigates or comes to the front while you are working. Only the very first run
-opens that tab.
-
-**On Windows the browser is started minimised**, once a profile exists — the
-first run stays visible, because that is the run you have to log in on. Chrome
-has no flag for this, so it is done by telling Windows how to show the process's
-first window; there is no equivalent on Linux or macOS, where that belongs to
-the window manager.
-
-Headless would be nicer and does not work: Cloudflare challenges Chrome's new
-headless mode (`cf-mitigated: challenge`) while passing the same browser visible
-(`cf-mitigated: (none)`). The window is the part being checked.
-
-> It uses its own profile directory (`browser-profile/`), not your everyday
-> one, and that is deliberate: a browser with debugging enabled can be driven
-> by anything else on your machine, so it should not be the browser holding the
-> rest of your logins.
-
-### Option B: Docker
-
-Best on a headless server, where the point is having a screen to log in
-through.
+The container provides the screen you log in through.
 
 ```bash
 docker compose up -d
 ```
 
-Open <http://localhost:3000> — that's the Chromium holding the login. Go to
-claude.ai and log in. Then `./usage`.
-
-Either way the checker looks at `localhost:9222` and needs no configuring.
-
-**Logging in on a server you are not sitting at.** Everything binds to
-`127.0.0.1`, so forward the port over SSH and open it locally:
+Then forward the port from your own machine and open
+<http://localhost:3000>:
 
 ```bash
 ssh -L 3000:localhost:3000 you@your-server
 ```
 
-Then <http://localhost:3000> in your own browser. Nothing to install, and your
-browser genuinely sees localhost, which the UI needs — it uses browser features
-that are refused over plain HTTP anywhere else. Port `3001` serves the same
-screen over HTTPS if you would rather put it behind a proxy, but that is a
-deliberate decision to make, not a default.
+Log into claude.ai there. Back on the server:
 
-> Do not republish these ports on `0.0.0.0` to save yourself the tunnel. The UI
-> has no password and the browser behind it is signed into your account, so on a
-> host with a public address that is an open, logged-in browser on the internet.
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./usage
+```
 
-## Using it
+> The Chromium image is about 4.6 GB. Check you have the disk.
 
-**CLI** — prints JSON, exits 0 on success, 1 on failure with the reason in
-`status`.
+> All ports bind to `127.0.0.1`. Do not republish them on `0.0.0.0` — the UI has
+> no password and the browser behind it is signed into your account.
 
-**MCP** — register the server and any Claude session gets a `claude_usage` tool
-reporting `session_pct` and `resets_at`, so it can decide whether to keep going.
+### Put it on PATH
 
-If you use Claude Code, let it do this for you:
+To call it from anywhere, or from another program, link it under whatever name
+you want:
+
+```bash
+sudo ln -s "$PWD/usage" /usr/local/bin/claude-usage
+```
+
+```console
+$ cd /anywhere && claude-usage
+{"status": "ok", "session_pct": 15.0, ...}
+```
+
+The link resolves back to the repo, so the venv and the browser profile are
+still found. On Windows, add the repo directory to `PATH` and call `usage`.
+
+## Usage
+
+```bash
+./usage                  # print usage as JSON
+./usage --login          # open claude.ai in the running browser, to sign in again
+./usage --register-mcp   # register the MCP server with Claude Code
+```
+
+On Windows, `usage` instead of `./usage`.
+
+### MCP
 
 ```bash
 ./usage --register-mcp
 ```
 
-That works out the right interpreter and absolute paths, registers the server
-for all your projects, and tells you to start a new session. If `claude` isn't
-on your PATH — another MCP client, say — it prints the JSON to paste instead.
+Registers the server for all projects and prints what it wrote. Start a new
+Claude session to pick it up. Claude then gets a `claude_usage` tool returning
+`status`, `session_pct` and `resets_at`.
 
-To do it by hand, point `command` at the Python **inside your `.venv`**, not a
-bare `python3`: that is where the dependencies are, and an MCP client activates
-nothing, it just runs a command.
+To register by hand, point `command` at the Python inside `.venv` — an MCP
+client runs a command, it does not activate anything:
 
-**Linux, macOS**
 ```json
 {
   "mcpServers": {
@@ -198,57 +155,99 @@ nothing, it just runs a command.
 }
 ```
 
-**Windows**
-```json
-{
-  "mcpServers": {
-    "claude-usage": {
-      "type": "stdio",
-      "command": "C:\\path\\to\\claude-usage\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\path\\to\\claude-usage\\mcp_server.py"]
-    }
-  }
-}
-```
+On Windows the interpreter is `.venv\Scripts\python.exe`.
 
-The tool reads the browser but never starts one — a window appearing because
-something polled your usage would be wrong. If the browser isn't running it
-returns `browser_unavailable`, and you start it with `./usage`.
+The tool reads the browser but never starts one. If none is running it returns
+`browser_unavailable`; start it with `./usage`.
+
+## Output
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok`, or why the reading failed |
+| `session_pct` | Percent of the 5-hour window used |
+| `session_resets_at` | When that window rolls over |
+| `weekly_pct` | Percent of the weekly limit used |
+| `weekly_resets_at` | When the week rolls over |
+| `blocking` | Active critical limits, which may name a specific model |
+| `credits_enabled` | Whether extra usage credits are on |
+| `credits_spent` / `credits_limit` | Credit spend, if enabled |
+| `source` | Always `browser` |
+
+`blocking` can name a model that is exhausted while both percentages still look
+healthy.
 
 ## Failure statuses
 
-All exit 1, with the reason in `status`:
+All exit 1, with the reason in `status` and detail in `detail`.
 
-| Status | Means | Fix |
+| Status | Meaning | Fix |
 |---|---|---|
-| `unauthenticated` | The login expired | Log in again in that browser |
-| `browser_unavailable` | The browser isn't reachable | `./usage --login`, or `docker compose up -d` |
-| `blocked` | Cloudflare didn't clear | Usually temporary; try again |
-| `request_failed` | The endpoint changed, or something else | Check what `detail` says |
+| `unauthenticated` | The login expired | `./usage --login`, then sign in |
+| `browser_unavailable` | No browser reachable | `./usage`, or `docker compose up -d` |
+| `blocked` | Cloudflare did not clear | Usually temporary; retry |
+| `request_failed` | Endpoint changed, or another error | Read `detail` |
 
-A response the digest doesn't recognise is a `request_failed`, never an `ok`
-full of nulls — a null percentage renders as 0%, which reads as plenty of
+A response the digest does not recognise is reported as `request_failed`, never
+as `ok` with null percentages — a null renders as 0%, which reads as plenty of
 headroom and is the opposite of the truth. Treat every reading as best-effort
 and show "usage unavailable" rather than zero.
 
-## Notes
+## Configuration
 
-The checker caches for 60 seconds, and on Linux and macOS it also serializes
-concurrent callers with a file lock. Windows has no such lock, so there the
-cache is the only guard — enough for what it protects against, a couple of extra
-tabs for a moment.
-
-The checker defaults to `http://localhost:9222`. If your browser is elsewhere,
-point it there:
+| Variable | Default | Purpose |
+|---|---|---|
+| `USAGE_CDP_URL` | `http://localhost:9222` | Where the browser is |
 
 ```bash
 USAGE_CDP_URL=http://other-host:9222 ./usage
 ```
 
+## Behaviour
+
+- Results are cached for 60 seconds; polling is cheap.
+- Concurrent callers are serialised with a file lock on macOS and Linux. Windows
+  has no such lock, so the cache is the only guard there.
+- One claude.ai tab is opened on first use and reused after, so nothing opens,
+  navigates or takes focus while you work.
+- On Windows the browser starts minimised once a profile exists. The first run
+  stays visible, because that is the run you log in on.
+- The browser uses its own profile directory, not your everyday one. A browser
+  with debugging enabled can be driven by anything else on the machine.
+- Closing the browser does not lose the login — it is on disk. `./usage` starts
+  it again.
+
+## How it works
+
+Anthropic publishes no API for plan usage. The only source is the endpoint
+claude.ai's own settings page calls, which needs your session — and Cloudflare
+rejects any client that is not a real browser.
+
+Cookies alone are not enough, which is worth knowing before trying the obvious
+shortcut:
+
+- An HTTP client with valid cookies gets `403` and `cf-mitigated: challenge`.
+- A freshly minted `__cf_bm` does not change that.
+- Neither does replaying a complete browser header set.
+- Chrome's new headless mode is challenged too, while the same browser visible
+  is not.
+
+What is fingerprinted is the client itself. So a browser you are logged into
+stays running, and `usage.py` connects to it and runs the fetch from inside a
+claude.ai tab — the same request the settings page makes. No cookie is copied
+out and no browser is launched behind your back.
+
+**This reads your own account through your own session.** No API key, no token,
+nothing sanctioned, and therefore best-effort. Do not build anything critical on
+it.
+
 ## Tests
 
-`./test_usage.py` (or `pytest`) covers the digest and the debugger address. No
-browser or network needed.
+```bash
+./test_usage.py    # or: pytest
+```
+
+Covers the digest and the debugger address. No browser or network needed.
 
 ## License
 

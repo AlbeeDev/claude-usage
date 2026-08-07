@@ -1,9 +1,20 @@
 #!/bin/sh
 # Run the checker without having to know what Python is called here.
 set -e
-dir=$(dirname "$0")
 
-# A .venv beside this script wins, so it never has to be activated by hand.
+# Follow symlinks to find where this really lives — it gets linked onto PATH as
+# claude-usage, and $0 is then the link, not the script.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+dir=$(cd "$(dirname "$target")" && pwd)
+
+# A .venv beside the script wins, so it never has to be activated by hand.
 if [ -x "$dir/.venv/bin/python" ]; then
     exec "$dir/.venv/bin/python" "$dir/usage.py" "$@"
 fi
