@@ -4,9 +4,14 @@
 name: usage-check
 
 services:
+  # Holds the login. You open its UI once, log in by hand, and leave it alone.
+  # No password on that UI, so keep the port off untrusted networks — bind it to
+  # 127.0.0.1:5800 instead if the host shares a network you don't control.
   firefox:
     image: jlesage/firefox
     container_name: usage-check-firefox
+    ports:
+      - "5800:5800"
     environment:
       - DISPLAY_WIDTH=1280
       - DISPLAY_HEIGHT=800
@@ -14,45 +19,19 @@ services:
     volumes:
       - firefox-profile:/config
     restart: unless-stopped
-    networks:
-      - usage-check-net
 
+  # Stores whatever the userscript pushes. Only useful with the push path set
+  # up; harmless otherwise.
   collector:
     image: python:3-alpine
     container_name: usage-check-collector
     command: python3 /collector.py
+    ports:
+      - "8000:8000"
     volumes:
       - ./collector.py:/collector.py:ro
       - ./data:/data
     restart: unless-stopped
-    networks:
-      - usage-check-net
-
-  tailscale:
-    image: tailscale/tailscale:latest
-    container_name: usage-check-tailscale
-    hostname: usage-check
-    environment:
-      - TS_AUTHKEY=${TS_AUTHKEY}
-      - TS_HOSTNAME=usage-check
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_SERVE_CONFIG=/config/serve.json
-      - TS_USERSPACE=false
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-      - ./tailscale:/config
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    restart: unless-stopped
-    networks:
-      - usage-check-net
-
-networks:
-  usage-check-net:
-    driver: bridge
 
 volumes:
   firefox-profile:
-  tailscale-state:

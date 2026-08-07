@@ -1,5 +1,7 @@
-# playwright also needs its browser: python3 -m playwright install chromium
+# Only needed for the fallback path — check.py driving its own Chromium. With
+# the push path set up, the checker just reads a file and needs none of this.
+# Also needs its browser: python3 -m playwright install chromium
 playwright>=1.61.0
 
-# Only needed to run mcp_server.py; the CLI works without it.
+# Only needed to run mcp_server.py.
 mcp>=1.27.2

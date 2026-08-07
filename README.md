@@ -43,39 +43,65 @@ is the client itself, so the request has to come from a real browser.
 no token, nothing sanctioned — and therefore best-effort by nature. Don't build
 anything critical on top of it.
 
+## What this costs you
+
+Worth knowing before you start, because a browser holding a login is not a
+zero-maintenance thing:
+
+- **Docker**, and a machine that stays on. The browser has to keep existing.
+- **One manual login**, by hand, in that browser.
+- **Logging in again roughly monthly**, when the session cookie expires. This
+  never goes away.
+- For the fallback path only: **Python, Playwright with Chromium, and Xvfb** on
+  the host, plus access to the docker CLI. Skip all of that if you set up the
+  push path below — then nothing but Docker is needed.
+
 ## Setup
 
-Requires Docker and Xvfb on the host.
+```bash
+docker compose up -d
+```
+
+Open <http://localhost:5800>, which is the Firefox holding the login. Go to
+claude.ai and **log in with the email-code flow, not Google** — Google
+frequently blocks unfamiliar browsers, the emailed code doesn't care.
+
+That's the only manual step. Everything else is optional.
+
+> That Firefox UI has no password on it. On a shared or untrusted network, bind
+> it to `127.0.0.1:5800` in `docker-compose.yml`, or put it behind something
+> that does have auth.
+
+### Reading the numbers, option A: the push path
+
+Recommended. Nothing is automated, so there is nothing for Cloudflare to
+challenge — and it needs no `pip install`, no Playwright and no Xvfb, because
+the reading is served over HTTP and `check.py` only has to read a file.
+
+1. In that Firefox, install Violentmonkey or Tampermonkey from
+   addons.mozilla.org.
+2. New script → paste [`userscript.js`](userscript.js) → save.
+3. Open a claude.ai tab and **pin it**, so session restore brings it back.
+
+Every 2 minutes that tab reports to the collector. Read the result over HTTP at
+<http://localhost:8000/latest>, or with `./check.py`, which will report
+`"source": "browser"`.
+
+### Reading the numbers, option B: the fallback
+
+If you skip the userscript, `./check.py` drives its own Chromium instead. This
+works, but it is automation and can be challenged, so treat it as the lesser
+path. It needs more installed:
 
 ```bash
 pip install -r requirements.txt
 python3 -m playwright install chromium
-
-cp .env.example .env          # add a Tailscale auth key
-docker compose up -d
-```
-
-Then open the Firefox UI (its Tailscale hostname — `usage-check` by default),
-go to claude.ai, and **log in with the email-code flow, not Google** — Google
-frequently blocks unfamiliar browsers, the emailed code doesn't care.
-
-That's the only manual step. Verify:
-
-```bash
 ./check.py
 ```
 
-### Optional but recommended: the push path
-
-The fallback works, but it is automation and can be challenged. To make it
-durable, let the browser volunteer the numbers instead:
-
-1. In that Firefox, install Violentmonkey or Tampermonkey from
-   addons.mozilla.org.
-2. New script → paste [`userscript.js`](userscript.js).
-3. Open a claude.ai tab and **pin it**, so session restore brings it back.
-
-`./check.py` will then report `"source": "browser"`.
+It also shells out to `docker cp` to read the session cookie out of the Firefox
+container, so it has to run somewhere with docker CLI access. Reports
+`"source": "fallback-chromium"`.
 
 ## Using it
 
@@ -96,9 +122,9 @@ durable, let the browser volunteer the numbers instead:
 }
 ```
 
-**HTTP** — with the push path running, `GET /latest` on the collector returns
-the last reading and its receive timestamp. Best option for an app in another
-container: no docker socket, no browser, just a request.
+**HTTP** — with the push path running, `GET http://localhost:8000/latest`
+returns the last reading and its receive timestamp. Best option for an app in
+another container: no docker socket, no browser, just a request.
 
 ## Maintenance
 
