@@ -117,6 +117,12 @@ It leaves one claude.ai tab open and reuses it every run, so nothing opens,
 navigates or comes to the front while you are working. Only the very first run
 opens that tab.
 
+**On Windows the browser is started minimised**, once a profile exists — the
+first run stays visible, because that is the run you have to log in on. Chrome
+has no flag for this, so it is done by telling Windows how to show the process's
+first window; there is no equivalent on Linux or macOS, where that belongs to
+the window manager.
+
 Headless would be nicer and does not work: Cloudflare challenges Chrome's new
 headless mode (`cf-mitigated: challenge`) while passing the same browser visible
 (`cf-mitigated: (none)`). The window is the part being checked.

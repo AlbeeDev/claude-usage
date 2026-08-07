@@ -101,6 +101,16 @@ def start_browser():
     kwargs = {"stdout": subprocess.DEVNULL}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        # Chrome has no flag for this, but Windows lets the parent say how the
+        # first window should appear. Only once there is a profile: the run that
+        # creates one is the run where somebody has to see the window to log in.
+        # No equivalent elsewhere — window placement belongs to the window
+        # manager on Linux and macOS.
+        if PROFILE.exists():
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimised, no focus
+            kwargs["startupinfo"] = startupinfo
     else:
         kwargs["start_new_session"] = True  # outlive this process
 
