@@ -25,12 +25,15 @@ mcp = Server("claude-usage")
 @mcp.tool(
     name="claude_usage",
     description=(
-        "Read how much of the current Claude session window is used: "
-        "'session_pct' (0-100) and 'resets_at' (when the 5-hour window rolls "
-        "over). Use before or during long unattended runs to decide whether to "
-        "keep going or stop cleanly. A 'status' other than 'ok' means usage "
-        "could not be read (the browser holding the login is down or logged "
-        "out); treat that as unknown usage, not as permission to continue."
+        "Read the user's Claude plan usage: how much of the current 5-hour "
+        "limit window is spent. Returns 'session_pct' (0-100) and 'resets_at' "
+        "(when the window rolls over). This is account plan usage — the meters "
+        "claude.ai shows in settings — not context-window usage and not API "
+        "billing. Use it when the user asks how much usage they have left or "
+        "whether they are close to a limit, and before starting work long "
+        "enough that hitting a limit partway through would matter. A 'status' "
+        "other than 'ok' means the reading could not be taken, not that usage "
+        "is low; treat it as unknown and say so rather than assuming headroom."
     ),
 )
 async def claude_usage() -> dict:
