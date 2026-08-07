@@ -81,13 +81,18 @@ google-chrome --remote-debugging-port=9222 --user-data-dir=~/.claude-usage-profi
   --remote-debugging-port=9222 --user-data-dir=~/claude-usage-profile
 ```
 
-**Windows**
-```
-"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-  --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\claude-usage-profile"
+**Windows** (PowerShell)
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:USERPROFILE\claude-usage-profile"
 ```
 
-Log into claude.ai in that window and leave it running. Then `./check.py`.
+**Windows** (cmd)
+```
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\claude-usage-profile"
+```
+
+Log into claude.ai in that window and leave it running. Then run the checker —
+`./check.py` on Linux and macOS, `python check.py` on Windows.
 
 > Use a separate `--user-data-dir`, not your everyday profile. A browser with
 > debugging enabled can be driven by anything else on your machine.
