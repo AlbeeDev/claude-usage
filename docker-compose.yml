@@ -1,7 +1,7 @@
 # The project name scopes the volume holding the browser profile — and that
 # profile holds the claude.ai login. Renaming it orphans the volume and the
 # login has to be done again.
-name: claude-usage
+name: claude-usage-mcp
 
 services:
   # Holds the login. You open its UI once, log in by hand, and leave it running.
