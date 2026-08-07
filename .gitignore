@@ -1,6 +1,4 @@
 .env
-chromium-profile/
-data/
 .cache.json
 .lock
 __pycache__/

@@ -1,44 +1,43 @@
 # claude-usage-mcp
 
 Read your Claude plan usage — the numbers behind claude.ai's "Current session"
-and "Weekly" meters — from the CLI, from an MCP tool, or over HTTP.
+and "Weekly" meters — from the CLI, or as an MCP tool.
 
 ```console
 $ ./check.py
 {
   "status": "ok",
-  "session_pct": 16.0,
-  "session_resets_at": "2026-08-05T22:40:00Z",
-  "weekly_pct": 30.0,
-  "weekly_resets_at": "2026-08-08T07:00:00Z",
+  "session_pct": 17.0,
+  "session_resets_at": "2026-08-07T12:40:00Z",
+  "weekly_pct": 36.0,
+  "weekly_resets_at": "2026-08-08T06:59:59Z",
   "blocking": [],
   "credits_enabled": false,
   "credits_spent": 0.0,
   "credits_limit": null,
-  "source": "fallback-chromium"
+  "source": "browser"
 }
 ```
 
 Useful for long unattended runs that should stop before hitting a limit rather
 than being killed mid-task, and for putting a usage meter in your own tools.
 
-## How it works, briefly
+## How it works
 
 Anthropic publishes no API for plan usage. The only source is the endpoint
 claude.ai's settings page calls, which needs your session — and Cloudflare
-rejects any client that isn't a real browser, cookies or not.
-
-So this keeps a Firefox container that holds your login (you log in once, by
-hand) and reads the numbers through a genuine browser: `check.py` drives a
-Chromium seeded with that session. There is also an optional setup where a
-userscript in that Firefox reports the numbers on its own, which the checker
-prefers when it is available.
+rejects any client that isn't a real browser.
 
 Cookies alone are not enough, which is worth knowing before you try the obvious
 shortcut: an HTTP client sending perfectly valid cookies still gets `403` with
 `cf-mitigated: challenge`, a freshly minted `__cf_bm` does not change that, and
-neither does replaying a complete browser header set. What is being fingerprinted
-is the client itself, so the request has to come from a real browser.
+neither does replaying a complete browser header set. What is being
+fingerprinted is the client itself.
+
+So this runs a Chromium in a container, you log into it once by hand, and it
+keeps running. `check.py` connects to that same browser and asks the question
+from inside a page — which is what the site's own settings modal does. Nothing
+copies cookies out, and no second browser is launched.
 
 **This reads your own account through your own logged-in session.** No API key,
 no token, nothing sanctioned — and therefore best-effort by nature. Don't build
@@ -46,62 +45,40 @@ anything critical on top of it.
 
 ## What this costs you
 
-Worth knowing before you start, because a browser holding a login is not a
-zero-maintenance thing:
+A browser holding a login is not a zero-maintenance thing:
 
 - **Docker**, and a machine that stays on. The browser has to keep existing.
 - **One manual login**, by hand, in that browser.
-- **Logging in again roughly monthly**, when the session cookie expires. This
-  never goes away.
-- **Python, Playwright with Chromium, and Xvfb** on the host, plus access to the
-  docker CLI.
+- **Logging in again roughly monthly**, when the session expires. This never
+  goes away.
 
 ## Setup
 
 ```bash
 docker compose up -d
+pip install -r requirements.txt
 ```
 
-Open <http://localhost:5800>, which is the Firefox holding the login. Go to
-claude.ai and **log in with the email-code flow, not Google** — Google
-frequently blocks unfamiliar browsers, the emailed code doesn't care.
+No browser download — `playwright` is only used to talk to the one in the
+container, so `playwright install` is not needed.
 
-That's the only manual step. Everything else is optional.
-
-> That Firefox UI has no password on it. On a shared or untrusted network, bind
-> it to `127.0.0.1:5800` in `docker-compose.yml`, or put it behind something
-> that does have auth.
-
-Then install what does the reading and try it:
+Open <http://localhost:3000>, which is the Chromium holding the login. Go to
+claude.ai and log in. Then:
 
 ```bash
-pip install -r requirements.txt
-python3 -m playwright install chromium
 ./check.py
 ```
 
-`check.py` drives its own Chromium, seeded with the session cookie it reads out
-of the Firefox container — which is why it needs docker CLI access. Reports
-`"source": "fallback-chromium"`.
+That's the whole setup.
 
-### Optional: the push path
+> Reaching that UI from another machine needs HTTPS, because the page uses
+> browser features that plain HTTP won't allow off localhost. Port `3001` serves
+> the same screen over HTTPS with a self-signed certificate, or put it behind
+> something that terminates TLS properly.
 
-You do not need this. It trades a few minutes of clicking for a setup that is
-harder for Cloudflare to object to, since nothing is being automated — a real
-logged-in tab reports its own numbers instead.
-
-1. In that Firefox, install Violentmonkey or Tampermonkey from
-   addons.mozilla.org.
-2. New script → paste [`userscript.js`](userscript.js) → save.
-3. Open a claude.ai tab and **pin it**, so session restore brings it back.
-
-That tab then reports every 2 minutes and `check.py` prefers its reading,
-skipping the browser entirely — no Playwright, no Xvfb, no docker access, and
-`"source"` becomes `"browser"`. It is also what makes the HTTP endpoint below
-return anything.
-
-These steps have not been tested end-to-end. The plumbing has: pushed readings
-are stored, preferred while fresh, and fall back cleanly when stale.
+> Neither port is password-protected, and the browser is logged into your
+> account. On a shared or untrusted network, bind them to `127.0.0.1` in
+> `docker-compose.yml`.
 
 ## Using it
 
@@ -122,34 +99,37 @@ are stored, preferred while fresh, and fall back cleanly when stale.
 }
 ```
 
-**HTTP** — `GET http://localhost:8000/latest` returns the last reading and its
-receive timestamp. Best option for an app in another container: no docker
-socket, no browser, just a request. **Requires the optional push path above** —
-without it there is nothing to serve and it returns `{"error":"no reading yet"}`.
+## Failure statuses
 
-## Maintenance
+All exit 1, with the reason in `status`:
 
-Your session cookie lasts about a month. When it expires the checker returns
-`{"status": "unauthenticated"}` — log in again in the Firefox container. That's
-the only recurring chore.
+| Status | Means | Fix |
+|---|---|---|
+| `unauthenticated` | The login expired | Log in again at <http://localhost:3000> |
+| `browser_unavailable` | The container isn't reachable | `docker compose up -d` |
+| `blocked` | Cloudflare didn't clear | Usually temporary; try again |
+| `request_failed` | The endpoint changed, or something else | Check what `detail` says |
 
-Cache the result if you're polling; the checker already caches for 60 seconds
-and serializes concurrent callers.
+A response the digest doesn't recognise is a `request_failed`, never an `ok`
+full of nulls — a null percentage renders as 0%, which reads as plenty of
+headroom and is the opposite of the truth. Treat every reading as best-effort
+and show "usage unavailable" rather than zero.
 
-If you renamed the compose project, point the checker at your own container:
+## Notes
+
+The checker caches for 60 seconds and serializes concurrent callers, so polling
+it is cheap.
+
+If your browser is somewhere else, point the checker at it:
 
 ```bash
-USAGE_FIREFOX_CONTAINER=my-firefox ./check.py
+USAGE_CDP_URL=http://other-host:9223 ./check.py
 ```
-
-Treat every reading as best-effort — the endpoint is undocumented and can change
-without warning. Show "usage unavailable" on a non-`ok` status rather than zero:
-a zero reads as plenty of headroom, which is the opposite of the truth.
 
 ## Tests
 
-`./test_check.py` (or `pytest`) covers the digest and the pushed-reading gate.
-No browser or network needed.
+`./test_check.py` (or `pytest`) covers the digest and the debugger address. No
+browser or network needed.
 
 ## License
 

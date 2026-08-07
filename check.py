@@ -2,11 +2,11 @@
 """Read Claude plan usage and print it as JSON.
 
 Cloudflare challenges any client that is not a genuine browser session, so the
-numbers are not scraped. A userscript in the always-on Firefox pushes readings
-to the local collector from a real logged-in tab (see userscript.js), and this
-reads the latest one. If no fresh reading exists it falls back to driving a
-Chromium itself, which works today but is the fragile path — it is automation,
-and automation is what gets challenged. See README.
+numbers cannot be fetched over plain HTTP. A Chromium container holds the login
+— a human logs into it once, by hand — and this connects to that same browser
+and asks the question from inside a page, where it is indistinguishable from
+the site's own request. Nothing copies cookies and nothing launches a second
+browser. See README.
 
 Exit codes: 0 = usage read, 1 = usage unavailable (reason in the JSON).
 Also exposed as an MCP tool by mcp_server.py, which calls read_usage().
@@ -15,23 +15,16 @@ Also exposed as an MCP tool by mcp_server.py, which calls read_usage().
 import fcntl
 import json
 import os
-import sqlite3
-import subprocess
 import sys
-import tempfile
 import time
-from contextlib import contextmanager
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-CONTAINER = os.environ.get("USAGE_FIREFOX_CONTAINER", "usage-check-firefox")
-PROFILE_DB = "/config/profile/cookies.sqlite"
-CHROME_PROFILE = HERE / "chromium-profile"
+CDP = os.environ.get("USAGE_CDP_URL", "http://localhost:9223")
 CACHE = HERE / ".cache.json"
-PUSHED = HERE / "data" / "latest.json"
 LOCK = HERE / ".lock"
-CACHE_TTL = 60          # seconds; several night runs may check at once
-PUSHED_TTL = 600        # seconds a browser-pushed reading stays usable
+CACHE_TTL = 60          # seconds; several callers may check at once
 CHALLENGE_TIMEOUT = 60  # seconds to let Cloudflare clear
 
 
@@ -43,104 +36,73 @@ class Unavailable(Exception):
             self.payload["detail"] = str(detail)[:200]
 
 
-@contextmanager
-def display():
-    """Headless Chromium gets flagged, so give it a virtual display to run in.
+def ws_endpoint():
+    """Where to talk to the browser.
 
-    Started in-process rather than by re-exec'ing under xvfb-run, because this
-    also runs inside the MCP server, which must not be replaced.
+    Chrome advertises its debugger socket as 127.0.0.1, which is its own
+    loopback and means nothing to us, so keep the address we already reached it
+    on and take only the path.
     """
-    if os.environ.get("DISPLAY"):
-        yield
-        return
-
-    num = next(n for n in range(99, 130) if not os.path.exists(f"/tmp/.X{n}-lock"))
-    proc = subprocess.Popen(
-        ["Xvfb", f":{num}", "-screen", "0", "1280x800x24"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    os.environ["DISPLAY"] = f":{num}"
-    time.sleep(1)
     try:
-        yield
-    finally:
-        os.environ.pop("DISPLAY", None)
-        proc.terminate()
-        proc.wait(timeout=10)
+        with urllib.request.urlopen(f"{CDP}/json/version", timeout=10) as r:
+            url = json.load(r)["webSocketDebuggerUrl"]
+    except Exception as e:
+        raise Unavailable("browser_unavailable", e)
+
+    authority = CDP.split("://", 1)[-1].rstrip("/")
+    path = url.partition("://")[2].partition("/")[2]
+    return f"ws://{authority}/{path}"
 
 
-def session_key():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        dest = Path(tmpdir) / "cookies.sqlite"
-        try:
-            subprocess.run(
-                ["docker", "cp", f"{CONTAINER}:{PROFILE_DB}", str(dest)],
-                check=True, capture_output=True, timeout=60,
-            )
-        except FileNotFoundError:
-            raise Unavailable("browser_unavailable", "docker not found")
-        except subprocess.CalledProcessError as e:
-            raise Unavailable("browser_unavailable", e.stderr.decode("utf-8", "replace").strip())
-        except subprocess.TimeoutExpired:
-            raise Unavailable("browser_unavailable", "docker cp timed out")
-
-        db = sqlite3.connect(dest)
-        row = db.execute(
-            "SELECT value FROM moz_cookies WHERE name='sessionKey' AND host LIKE '%claude.ai%'"
-        ).fetchone()
-        db.close()
-
-    if not row:
-        raise Unavailable("unauthenticated", "no sessionKey in browser profile")
-    return row[0]
-
-
-def fetch(key):
-    """Load claude.ai in a real browser, then call the API from the page."""
+def fetch():
+    """Ask the logged-in browser, from inside a page it opens itself."""
     from playwright.sync_api import sync_playwright
 
+    endpoint = ws_endpoint()
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(CHROME_PROFILE),
-            headless=False,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
         try:
-            ctx.add_cookies([{
-                "name": "sessionKey", "value": key, "domain": ".claude.ai",
-                "path": "/", "secure": True, "httpOnly": True,
-            }])
+            browser = p.chromium.connect_over_cdp(endpoint, timeout=30000)
+        except Exception as e:
+            raise Unavailable("browser_unavailable", e)
+
+        # close() here drops our connection; it does not close the human's
+        # browser, which has to keep running to hold the login.
+        try:
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
-            page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
+            try:
+                page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
 
-            deadline = time.time() + CHALLENGE_TIMEOUT
-            while time.time() < deadline:
-                text = page.evaluate("() => document.body.innerText")[:200]
-                if "security verification" not in text and "Just a moment" not in text:
-                    break
-                page.wait_for_timeout(3000)
-            else:
-                raise Unavailable("blocked", "Cloudflare challenge did not clear")
+                deadline = time.time() + CHALLENGE_TIMEOUT
+                while time.time() < deadline:
+                    text = page.evaluate("() => document.body.innerText")[:200]
+                    if "security verification" not in text and "Just a moment" not in text:
+                        break
+                    page.wait_for_timeout(3000)
+                else:
+                    raise Unavailable("blocked", "Cloudflare challenge did not clear")
 
-            def api(path):
-                r = page.evaluate(
-                    """async (p) => {
-                        const res = await fetch(p, {headers: {'Accept': 'application/json'}});
-                        return {status: res.status, body: await res.text()};
-                    }""", path)
-                if r["status"] in (401, 403):
-                    raise Unavailable("unauthenticated", f"HTTP {r['status']} from {path}")
-                if r["status"] != 200:
-                    raise Unavailable("request_failed", f"HTTP {r['status']} from {path}")
-                return json.loads(r["body"])
+                def api(path):
+                    r = page.evaluate(
+                        """async (p) => {
+                            const res = await fetch(p, {headers: {'Accept': 'application/json'}});
+                            return {status: res.status, body: await res.text()};
+                        }""", path)
+                    if r["status"] in (401, 403):
+                        raise Unavailable("unauthenticated", f"HTTP {r['status']} from {path}")
+                    if r["status"] != 200:
+                        raise Unavailable("request_failed", f"HTTP {r['status']} from {path}")
+                    return json.loads(r["body"])
 
-            orgs = api("/api/organizations")
-            chat = [o for o in orgs if "chat" in (o.get("capabilities") or [])]
-            if not chat:
-                raise Unavailable("request_failed", "no chat-capable organization on this account")
-            return api(f"/api/organizations/{chat[0]['uuid']}/usage")
+                orgs = api("/api/organizations")
+                chat = [o for o in orgs if "chat" in (o.get("capabilities") or [])]
+                if not chat:
+                    raise Unavailable("request_failed", "no chat-capable organization on this account")
+                return api(f"/api/organizations/{chat[0]['uuid']}/usage")
+            finally:
+                page.close()
         finally:
-            ctx.close()
+            browser.close()
 
 
 def digest(u):
@@ -192,37 +154,13 @@ def cached():
     return None
 
 
-def pushed():
-    """Latest reading volunteered by the browser userscript, if it's fresh.
-
-    Preferred over driving a browser ourselves: it comes from a real logged-in
-    tab, so there is no automation for Cloudflare to challenge. A reading that
-    is stale, failed, or no longer digestible falls through to the browser.
-    """
-    try:
-        c = json.loads(PUSHED.read_text())
-        age = time.time() - c["received_at"]
-        if age > PUSHED_TTL or "error" in c["usage"]:
-            return None
-        out = digest(c["usage"])
-        out["source"] = "browser"
-        out["age_seconds"] = round(age)
-        return out
-    except Exception:
-        return None
-
-
 def read_usage():
     """Return the usage digest. Always a dict; check its "status" field."""
-    hit = pushed()
-    if hit:
-        return hit
-
     hit = cached()
     if hit:
         return hit
 
-    # One browser at a time — parallel night runs would fight over the profile.
+    # One caller at a time — parallel runs would each open their own page.
     LOCK.touch(exist_ok=True)
     with open(LOCK, "r+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -230,9 +168,8 @@ def read_usage():
         if hit:
             return hit
         try:
-            with display():
-                data = digest(fetch(session_key()))
-            data["source"] = "fallback-chromium"
+            data = digest(fetch())
+            data["source"] = "browser"
             CACHE.write_text(json.dumps({"ts": time.time(), "data": data}))
             return data
         except Unavailable as e:

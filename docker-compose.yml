@@ -1,37 +1,43 @@
 # The project name scopes the volume holding the browser profile — and that
 # profile holds the claude.ai login. Renaming it orphans the volume and the
-# login has to be done again. Kept as "usage-check" from where this started.
-name: usage-check
+# login has to be done again.
+name: claude-usage
 
 services:
-  # Holds the login. You open its UI once, log in by hand, and leave it alone.
-  # No password on that UI, so keep the port off untrusted networks — bind it to
-  # 127.0.0.1:5800 instead if the host shares a network you don't control.
-  firefox:
-    image: jlesage/firefox
-    container_name: usage-check-firefox
-    ports:
-      - "5800:5800"
+  # Holds the login. You open its UI once, log in by hand, and leave it running.
+  # No password on that UI, so keep the ports off untrusted networks — bind them
+  # to 127.0.0.1 if this host shares a network you don't control.
+  browser:
+    image: lscr.io/linuxserver/chromium:latest
+    container_name: claude-usage-browser
+    security_opt:
+      - seccomp:unconfined
     environment:
-      - DISPLAY_WIDTH=1280
-      - DISPLAY_HEIGHT=800
-      - KEEP_APP_RUNNING=1
+      - PUID=0
+      - PGID=0
+      - TZ=Etc/UTC
+      - CHROME_CLI=--remote-debugging-port=9222
     volumes:
-      - firefox-profile:/config
+      - browser-profile:/config
+    ports:
+      - "3000:3000"   # the UI you log in through (HTTP, use from localhost)
+      - "3001:3001"   # same UI over HTTPS, for reaching it from another machine
+      - "9223:9223"   # how check.py talks to this browser, via the bridge below
+    shm_size: "1gb"
     restart: unless-stopped
 
-  # Stores whatever the userscript pushes. Only useful with the push path set
-  # up; harmless otherwise.
-  collector:
-    image: python:3-alpine
-    container_name: usage-check-collector
-    command: python3 /collector.py
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./collector.py:/collector.py:ro
-      - ./data:/data
+  # Chromium only ever listens for debugger connections on its own 127.0.0.1 and
+  # ignores --remote-debugging-address, so nothing outside the container can
+  # reach it. Sharing the browser's network namespace makes that loopback
+  # reachable without exposing anything else.
+  cdp-bridge:
+    image: alpine/socat
+    container_name: claude-usage-cdp
+    network_mode: "service:browser"
+    command: TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222
+    depends_on:
+      - browser
     restart: unless-stopped
 
 volumes:
-  firefox-profile:
+  browser-profile:

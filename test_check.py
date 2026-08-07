@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Tests for the parts that have logic: the digest and the pushed-reading gate.
+"""Tests for the parts that have logic: the digest and the debugger address.
 
 Nothing here touches a browser or the network. Run with pytest, or directly:
 
     ./test_check.py
 """
 
+import io
 import json
-import tempfile
-import time
-from pathlib import Path
+import urllib.request
 
 import check
 
@@ -57,24 +56,33 @@ def test_digest_refuses_an_unrecognised_response():
             raise AssertionError(f"digest({bad}) should have refused")
 
 
-def test_pushed_falls_through_on_a_bad_reading():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "latest.json"
-        original = check.PUSHED
-        check.PUSHED = path
-        try:
-            path.write_text(json.dumps({"received_at": time.time(), "usage": {"probe": True}}))
-            assert check.pushed() is None, "a bad pushed reading must not be used"
+def test_ws_endpoint_ignores_the_browsers_own_loopback():
+    # Chrome reports 127.0.0.1, which is its loopback inside the container and
+    # not anywhere we can reach. The address we already used has to win.
+    advertised = {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/abc-123"}
+    original = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: io.BytesIO(json.dumps(advertised).encode())
+    try:
+        assert check.ws_endpoint() == "ws://localhost:9223/devtools/browser/abc-123"
+    finally:
+        urllib.request.urlopen = original
 
-            path.write_text(json.dumps({"received_at": time.time(), "usage": USAGE}))
-            good = check.pushed()
-            assert good["session_pct"] == 12.0
-            assert good["source"] == "browser"
 
-            path.write_text(json.dumps({"received_at": 0, "usage": USAGE}))
-            assert check.pushed() is None, "a stale pushed reading must not be used"
-        finally:
-            check.PUSHED = original
+def test_ws_endpoint_reports_an_unreachable_browser():
+    original = urllib.request.urlopen
+
+    def boom(*a, **k):
+        raise OSError("connection refused")
+
+    urllib.request.urlopen = boom
+    try:
+        check.ws_endpoint()
+    except check.Unavailable as e:
+        assert e.payload["status"] == "browser_unavailable"
+    else:
+        raise AssertionError("an unreachable browser should be reported")
+    finally:
+        urllib.request.urlopen = original
 
 
 if __name__ == "__main__":
