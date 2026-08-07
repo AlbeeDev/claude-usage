@@ -1,4 +1,4 @@
-# claude-usage-mcp
+# claude-usage
 
 Read your Claude plan usage from the command line, or as an MCP tool.
 
