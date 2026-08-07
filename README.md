@@ -113,6 +113,10 @@ park it on another desktop; it only has to exist. You can close it, and the
 login survives in `browser-profile/`, but then `./usage` has to start it again
 before it can read anything, which it does by itself.
 
+It leaves one claude.ai tab open and reuses it every run, so nothing opens,
+navigates or comes to the front while you are working. Only the very first run
+opens that tab.
+
 Headless would be nicer and does not work: Cloudflare challenges Chrome's new
 headless mode (`cf-mitigated: challenge`) while passing the same browser visible
 (`cf-mitigated: (none)`). The window is the part being checked.

@@ -146,8 +146,21 @@ def ws_endpoint():
     return f"ws://{authority}/{path}"
 
 
+def open_claude(page):
+    """Put a page on claude.ai and wait for Cloudflare to be done with it."""
+    page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
+
+    deadline = time.time() + CHALLENGE_TIMEOUT
+    while time.time() < deadline:
+        text = page.evaluate("() => document.body.innerText")[:200]
+        if "security verification" not in text and "Just a moment" not in text:
+            return
+        page.wait_for_timeout(3000)
+    raise Unavailable("blocked", "Cloudflare challenge did not clear")
+
+
 def fetch():
-    """Ask the logged-in browser, from inside a page it opens itself."""
+    """Ask the logged-in browser, from a claude.ai tab it leaves open."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -165,38 +178,48 @@ def fetch():
         # browser, which has to keep running to hold the login.
         try:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = ctx.new_page()
-            try:
-                page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
 
-                deadline = time.time() + CHALLENGE_TIMEOUT
-                while time.time() < deadline:
-                    text = page.evaluate("() => document.body.innerText")[:200]
-                    if "security verification" not in text and "Just a moment" not in text:
-                        break
-                    page.wait_for_timeout(3000)
-                else:
-                    raise Unavailable("blocked", "Cloudflare challenge did not clear")
+            # Reuse a claude.ai tab if one is open. Opening a tab and navigating
+            # it pulls the window to the front, which is intolerable for
+            # something that may run every few minutes; asking a tab that is
+            # already sitting there disturbs nothing. The tab is left open
+            # afterwards, which is what keeps later runs quiet.
+            page = next((pg for pg in ctx.pages
+                         if pg.url.startswith("https://claude.ai")), None)
+            fresh = page is None
+            if fresh:
+                page = ctx.new_page()
+                open_claude(page)
 
-                def api(path):
-                    r = page.evaluate(
-                        """async (p) => {
-                            const res = await fetch(p, {headers: {'Accept': 'application/json'}});
-                            return {status: res.status, body: await res.text()};
-                        }""", path)
-                    if r["status"] in (401, 403):
-                        raise Unavailable("unauthenticated", f"HTTP {r['status']} from {path}")
-                    if r["status"] != 200:
-                        raise Unavailable("request_failed", f"HTTP {r['status']} from {path}")
-                    return json.loads(r["body"])
+            def api(path):
+                r = page.evaluate(
+                    """async (p) => {
+                        const res = await fetch(p, {headers: {'Accept': 'application/json'}});
+                        return {status: res.status, body: await res.text()};
+                    }""", path)
+                if r["status"] in (401, 403):
+                    raise Unavailable("unauthenticated", f"HTTP {r['status']} from {path}")
+                if r["status"] != 200:
+                    raise Unavailable("request_failed", f"HTTP {r['status']} from {path}")
+                return json.loads(r["body"])
 
+            def read():
                 orgs = api("/api/organizations")
                 chat = [o for o in orgs if "chat" in (o.get("capabilities") or [])]
                 if not chat:
-                    raise Unavailable("request_failed", "no chat-capable organization on this account")
+                    raise Unavailable("request_failed",
+                                      "no chat-capable organization on this account")
                 return api(f"/api/organizations/{chat[0]['uuid']}/usage")
-            finally:
-                page.close()
+
+            try:
+                return read()
+            except Unavailable:
+                if fresh:
+                    raise
+                # The tab we borrowed was stale — sitting on a challenge or an
+                # error page. Reload it and try once more before giving up.
+                open_claude(page)
+                return read()
         finally:
             browser.close()
 
