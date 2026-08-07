@@ -334,12 +334,12 @@ def cli(argv):
                   "On a machine with no screen, use Docker instead: docker compose up -d",
                   file=sys.stderr)
             return 1
-        print(f"Started {exe}\nProfile: {PROFILE}\n\n"
-              "Log into claude.ai in the window that opened, leave it running,\n"
-              "then run this again.", file=sys.stderr)
-        result = {"status": "unauthenticated", "detail": "browser started; log in and re-run"}
+        print(f"Started {exe}", file=sys.stderr)
+        # The profile usually still holds a login — closing the window loses the
+        # connection, not the session — so read rather than assume a sign-in.
+        result = read_usage()
 
-    elif result["status"] == "unauthenticated":
+    if result["status"] == "unauthenticated":
         print("Not logged in. Sign into claude.ai in the browser that is already\n"
               "running, or run this with --login to open the page there.",
               file=sys.stderr)

@@ -108,6 +108,15 @@ Log in there, then run it again and you get numbers. That is the whole setup.
 If no browser can be found or it fails to start, it says so and exits 1 — it
 won't claim success and leave you guessing.
 
+**Leave that window running** — it is what holds the session. Minimise it, or
+park it on another desktop; it only has to exist. You can close it, and the
+login survives in `browser-profile/`, but then `./usage` has to start it again
+before it can read anything, which it does by itself.
+
+Headless would be nicer and does not work: Cloudflare challenges Chrome's new
+headless mode (`cf-mitigated: challenge`) while passing the same browser visible
+(`cf-mitigated: (none)`). The window is the part being checked.
+
 > It uses its own profile directory (`browser-profile/`), not your everyday
 > one, and that is deliberate: a browser with debugging enabled can be driven
 > by anything else on your machine, so it should not be the browser holding the
