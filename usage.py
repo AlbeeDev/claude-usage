@@ -352,6 +352,69 @@ def mcp_command():
     return os.path.abspath(python), os.path.abspath(HERE / "mcp_server.py")
 
 
+COMMAND_NAME = "claude-usage"
+
+
+def path_dirs():
+    """Directories on PATH we could install into, best first."""
+    on_path = [Path(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+
+    if sys.platform == "win32":
+        preferred = [Path.home() / "AppData/Local/Microsoft/WindowsApps"]
+    elif os.geteuid() == 0:
+        preferred = [Path("/usr/local/bin")]
+    else:
+        preferred = [Path.home() / ".local/bin", Path.home() / "bin"]
+
+    ranked = [d for d in preferred if d in on_path]
+    ranked += [d for d in on_path if d not in ranked and os.access(d, os.W_OK)]
+    return ranked, preferred
+
+
+def add_to_path():
+    """Install this as `claude-usage`, runnable from anywhere.
+
+    A link, not a copy: the wrapper resolves symlinks back to here, so the venv
+    and the browser profile are still found, and updating the repo updates the
+    command.
+    """
+    source = HERE / ("usage.bat" if sys.platform == "win32" else "usage")
+    if not source.exists():
+        print(f"{source} is missing — run this from a checkout, not an install.")
+        return 1
+
+    ranked, preferred = path_dirs()
+    if not ranked:
+        want = preferred[0]
+        print(f"No writable directory on your PATH. Create {want} and add it to\n"
+              f"PATH, then run this again.")
+        return 1
+
+    target = ranked[0] / (COMMAND_NAME + (".bat" if sys.platform == "win32" else ""))
+
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() and os.path.realpath(target) == str(source.resolve()):
+            print(f"Already installed at {target}")
+            return 0
+        print(f"{target} already exists and is not ours. Remove it first, or\n"
+              f"install under another name by linking it yourself.")
+        return 1
+
+    try:
+        if sys.platform == "win32":
+            # Windows symlinks need admin rights, so leave a shim instead.
+            target.write_text(f'@echo off\r\n"{source}" %*\r\n')
+        else:
+            target.symlink_to(source)
+    except OSError as e:
+        print(f"Could not write {target}: {e}")
+        return 1
+
+    print(f"Installed {target}\n\nRun `{COMMAND_NAME}` from anywhere. "
+          f"To remove it, delete that file.")
+    return 0
+
+
 def register_mcp():
     """Register the MCP server with Claude Code, or say how to do it by hand."""
     python, server = mcp_command()
@@ -397,6 +460,9 @@ def cli(argv):
     person right there, so a missing browser is worth starting rather than
     merely reporting. Guidance goes to stderr so stdout stays parseable JSON.
     """
+    if "--add-to-path" in argv:
+        return add_to_path()
+
     if "--register-mcp" in argv:
         return register_mcp()
 

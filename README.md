@@ -105,11 +105,10 @@ python3 -m venv .venv
 
 ### Put it on PATH
 
-To call it from anywhere, or from another program, link it under whatever name
-you want:
+To call it from anywhere, or from another program:
 
 ```bash
-sudo ln -s "$PWD/usage" /usr/local/bin/claude-usage
+./usage --add-to-path
 ```
 
 ```console
@@ -117,8 +116,13 @@ $ cd /anywhere && claude-usage
 {"status": "ok", "session_pct": 15.0, ...}
 ```
 
-The link resolves back to the repo, so the venv and the browser profile are
-still found. On Windows, add the repo directory to `PATH` and call `usage`.
+It links into a directory already on your PATH — `/usr/local/bin` as root,
+`~/.local/bin` otherwise — and prints where it went. On Windows it writes a
+small `.bat` shim instead, since symlinks there need admin rights.
+
+It is a link, not a copy, so updating the repo updates the command, and the venv
+and browser profile are still found. To remove it, delete the file it names. It
+will not overwrite a file it did not create.
 
 ## Usage
 
@@ -126,6 +130,7 @@ still found. On Windows, add the repo directory to `PATH` and call `usage`.
 ./usage                  # print usage as JSON
 ./usage --login          # open claude.ai in the running browser, to sign in again
 ./usage --register-mcp   # register the MCP server with Claude Code
+./usage --add-to-path    # install as claude-usage, runnable from anywhere
 ```
 
 On Windows, `usage` instead of `./usage`.
