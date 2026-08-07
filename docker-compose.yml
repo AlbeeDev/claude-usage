@@ -24,7 +24,7 @@ services:
       - "3001:3001"   # same UI over HTTPS, for reaching it from another machine
       # 9222 on the host either way, so the checker needs no reconfiguring
       # whether the browser is this container or one you started yourself.
-      - "9222:9223"   # how check.py talks to this browser, via the bridge below
+      - "9222:9223"   # how usage.py talks to this browser, via the bridge below
     shm_size: "1gb"
     restart: unless-stopped
 
