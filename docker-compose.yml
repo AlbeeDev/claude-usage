@@ -1,0 +1,58 @@
+# The project name scopes the volume holding the browser profile — and that
+# profile holds the claude.ai login. Renaming it orphans the volume and the
+# login has to be done again. Kept as "usage-check" from where this started.
+name: usage-check
+
+services:
+  firefox:
+    image: jlesage/firefox
+    container_name: usage-check-firefox
+    environment:
+      - DISPLAY_WIDTH=1280
+      - DISPLAY_HEIGHT=800
+      - KEEP_APP_RUNNING=1
+    volumes:
+      - firefox-profile:/config
+    restart: unless-stopped
+    networks:
+      - usage-check-net
+
+  collector:
+    image: python:3-alpine
+    container_name: usage-check-collector
+    command: python3 /collector.py
+    volumes:
+      - ./collector.py:/collector.py:ro
+      - ./data:/data
+    restart: unless-stopped
+    networks:
+      - usage-check-net
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: usage-check-tailscale
+    hostname: usage-check
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=usage-check
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_USERSPACE=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    networks:
+      - usage-check-net
+
+networks:
+  usage-check-net:
+    driver: bridge
+
+volumes:
+  firefox-profile:
+  tailscale-state:

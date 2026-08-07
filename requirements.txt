@@ -1,0 +1,5 @@
+# playwright also needs its browser: python3 -m playwright install chromium
+playwright>=1.61.0
+
+# Only needed to run mcp_server.py; the CLI works without it.
+mcp>=1.27.2
