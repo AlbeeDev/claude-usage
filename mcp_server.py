@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP server exposing the plan-usage check as a tool.
 
-Thin wrapper — all logic lives in check.py, which is also usable on its own as
+Thin wrapper — all logic lives in usage.py, which is also usable on its own as
 a CLI. Registered as a stdio server; Claude Code spawns it per session.
 """
 
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from mcp.server.fastmcp import FastMCP
 
-from check import read_usage
+from usage import read_usage
 
 mcp = FastMCP("claude-usage")
 

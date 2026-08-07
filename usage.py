@@ -29,7 +29,8 @@ except ImportError:  # Windows
     fcntl = None
 
 HERE = Path(__file__).parent
-CDP = os.environ.get("USAGE_CDP_URL", "http://localhost:9222")
+DEFAULT_CDP = "http://localhost:9222"
+CDP = os.environ.get("USAGE_CDP_URL", DEFAULT_CDP)
 CACHE = HERE / ".cache.json"
 LOCK = HERE / ".lock"
 PROFILE = HERE / "browser-profile"
@@ -138,7 +139,7 @@ def ws_endpoint():
             url = json.load(r)["webSocketDebuggerUrl"]
     except Exception as e:
         raise Unavailable(
-            "browser_unavailable", f"nothing at {CDP} ({e}); run check.py --login")
+            "browser_unavailable", f"nothing at {CDP} ({e}); run ./usage --login")
 
     authority = CDP.split("://", 1)[-1].rstrip("/")
     path = url.partition("://")[2].partition("/")[2]
@@ -283,34 +284,65 @@ def read_usage():
             return {"status": "request_failed", "detail": str(e)[:200]}
 
 
-def login():
-    """Open the browser so a human can sign in. Prints progress, not JSON."""
-    try:
-        urllib.request.urlopen(f"{CDP}/json/version", timeout=5).close()
-    except Exception:
-        pass
-    else:
-        print(f"A browser is already listening on {CDP}.")
-        print("Log into claude.ai there, then run this again without --login.")
-        return 0
+def open_login_page():
+    """Bring up claude.ai in the browser that is already running.
 
-    try:
-        exe = start_browser()
-    except Unavailable as e:
-        print(json.dumps(e.payload, indent=2))
-        return 1
+    For the case auto-detection cannot help with: the browser is there, the
+    session simply expired. Starting another one would be the wrong answer.
+    """
+    from playwright.sync_api import sync_playwright
 
-    print(f"Started {exe}")
-    print(f"Profile: {PROFILE}")
-    print("\nLog into claude.ai in the window that opened, leave it running,")
-    print("then run this again without --login.")
-    return 0
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(ws_endpoint(), timeout=30000)
+        try:
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            ctx.new_page().goto("https://claude.ai/login", wait_until="domcontentloaded")
+        finally:
+            browser.close()
+
+
+def cli(argv):
+    """The command-line front door.
+
+    read_usage() never opens a browser — callers embedding it should not get a
+    window appearing out of nowhere. Run from a terminal, though, there is a
+    person right there, so a missing browser is worth starting rather than
+    merely reporting. Guidance goes to stderr so stdout stays parseable JSON.
+    """
+    if "--login" in argv:
+        try:
+            open_login_page()
+        except Unavailable:
+            pass  # no browser to open a page in; the usual path starts one
+        else:
+            print("Opened claude.ai in the running browser. Sign in there.", file=sys.stderr)
+            return 0
+
+    result = read_usage()
+
+    if result["status"] == "browser_unavailable" and CDP == DEFAULT_CDP:
+        print("No browser is running. Starting one...", file=sys.stderr)
+        try:
+            exe = start_browser()
+        except Unavailable as e:
+            print(json.dumps(e.payload, indent=2))
+            print(f"\nCould not start a browser: {e.payload.get('detail', '')}\n"
+                  "On a machine with no screen, use Docker instead: docker compose up -d",
+                  file=sys.stderr)
+            return 1
+        print(f"Started {exe}\nProfile: {PROFILE}\n\n"
+              "Log into claude.ai in the window that opened, leave it running,\n"
+              "then run this again.", file=sys.stderr)
+        result = {"status": "unauthenticated", "detail": "browser started; log in and re-run"}
+
+    elif result["status"] == "unauthenticated":
+        print("Not logged in. Sign into claude.ai in the browser that is already\n"
+              "running, or run this with --login to open the page there.",
+              file=sys.stderr)
+
+    print(json.dumps(result, indent=2))
+    return 0 if result["status"] == "ok" else 1
 
 
 if __name__ == "__main__":
-    if "--login" in sys.argv[1:]:
-        sys.exit(login())
-
-    result = read_usage()
-    print(json.dumps(result, indent=2))
-    sys.exit(0 if result["status"] == "ok" else 1)
+    sys.exit(cli(sys.argv[1:]))

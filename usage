@@ -1,0 +1,13 @@
+#!/bin/sh
+# Run the checker without having to know what Python is called here.
+set -e
+dir=$(dirname "$0")
+
+for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1; then
+        exec "$py" "$dir/usage.py" "$@"
+    fi
+done
+
+echo "No Python found. Install Python 3, then run this again." >&2
+exit 1

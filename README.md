@@ -4,7 +4,7 @@ Read your Claude plan usage — the numbers behind claude.ai's "Current session"
 and "Weekly" meters — from the CLI, or as an MCP tool.
 
 ```console
-$ ./check.py
+$ ./usage
 {
   "status": "ok",
   "session_pct": 17.0,
@@ -35,7 +35,7 @@ neither does replaying a complete browser header set. What is being
 fingerprinted is the client itself.
 
 So you keep a browser logged in — one you start yourself, or the container in
-`docker-compose.yml` — and `check.py` connects to that same browser and asks the
+`docker-compose.yml` — and `usage.py` connects to that same browser and asks the
 question from inside a page, which is what the site's own settings modal does.
 Nothing copies cookies out, and no browser is launched behind your back.
 
@@ -64,25 +64,35 @@ pip install -r requirements.txt
 No browser download: `playwright` is used only to talk to a browser that is
 already running, so `playwright install` is not needed.
 
+Run it with `./usage` on Linux and macOS, or `usage` on Windows — small wrappers
+that work out what Python is called here, so you don't have to.
+
 Then pick whichever fits your machine.
 
 ### Option A: on a machine with a screen
 
-No Docker involved.
+No Docker involved. Just run it:
 
 ```bash
-python check.py --login
+./usage           # Windows: usage
 ```
 
-That finds Chrome, Chromium or Edge, opens claude.ai in it, and tells you what
-to do next: log in, leave the window running. Then:
+The first time, there is no browser yet, so it finds Chrome, Chromium or Edge
+and starts one for you:
 
-```bash
-python check.py
+```console
+$ ./usage
+No browser is running. Starting one...
+Started /usr/bin/google-chrome
+
+Log into claude.ai in the window that opened, leave it running,
+then run this again.
 ```
 
-If it can't find a browser or the browser fails to start, it says so and exits
-1 — it won't claim success and leave you guessing.
+Log in there, then run it again and you get numbers. That is the whole setup.
+
+If no browser can be found or it fails to start, it says so and exits 1 — it
+won't claim success and leave you guessing.
 
 > It uses its own profile directory (`browser-profile/`), not your everyday
 > one, and that is deliberate: a browser with debugging enabled can be driven
@@ -99,7 +109,7 @@ docker compose up -d
 ```
 
 Open <http://localhost:3000> — that's the Chromium holding the login. Go to
-claude.ai and log in. Then `python check.py`.
+claude.ai and log in. Then `./usage`.
 
 Either way the checker looks at `localhost:9222` and needs no configuring.
 
@@ -138,7 +148,7 @@ All exit 1, with the reason in `status`:
 | Status | Means | Fix |
 |---|---|---|
 | `unauthenticated` | The login expired | Log in again in that browser |
-| `browser_unavailable` | The browser isn't reachable | `python check.py --login`, or `docker compose up -d` |
+| `browser_unavailable` | The browser isn't reachable | `./usage --login`, or `docker compose up -d` |
 | `blocked` | Cloudflare didn't clear | Usually temporary; try again |
 | `request_failed` | The endpoint changed, or something else | Check what `detail` says |
 
@@ -158,12 +168,12 @@ The checker defaults to `http://localhost:9222`. If your browser is elsewhere,
 point it there:
 
 ```bash
-USAGE_CDP_URL=http://other-host:9222 ./check.py
+USAGE_CDP_URL=http://other-host:9222 ./usage
 ```
 
 ## Tests
 
-`./test_check.py` (or `pytest`) covers the digest and the debugger address. No
+`./test_usage.py` (or `pytest`) covers the digest and the debugger address. No
 browser or network needed.
 
 ## License
