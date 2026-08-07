@@ -14,7 +14,10 @@ Also exposed as an MCP tool by mcp_server.py, which calls read_usage().
 
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from contextlib import contextmanager
@@ -29,6 +32,7 @@ HERE = Path(__file__).parent
 CDP = os.environ.get("USAGE_CDP_URL", "http://localhost:9222")
 CACHE = HERE / ".cache.json"
 LOCK = HERE / ".lock"
+PROFILE = HERE / "browser-profile"
 CACHE_TTL = 60          # seconds; several callers may check at once
 CHALLENGE_TIMEOUT = 60  # seconds to let Cloudflare clear
 
@@ -39,6 +43,87 @@ class Unavailable(Exception):
         self.payload = {"status": status}
         if detail:
             self.payload["detail"] = str(detail)[:200]
+
+
+def browser_binary():
+    """Wherever this machine keeps Chrome. Edge counts — it is Chromium too."""
+    if sys.platform == "win32":
+        roots = [os.environ.get(v, "") for v in
+                 ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+        candidates = [
+            Path(r) / sub for r in roots if r for sub in (
+                r"Google\Chrome\Application\chrome.exe",
+                r"Microsoft\Edge\Application\msedge.exe",
+                r"Chromium\Application\chrome.exe",
+            )
+        ]
+    elif sys.platform == "darwin":
+        candidates = [Path(p) for p in (
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        )]
+    else:
+        found = (shutil.which(n) for n in
+                 ("google-chrome", "google-chrome-stable", "chromium",
+                  "chromium-browser", "microsoft-edge"))
+        candidates = [Path(p) for p in found if p]
+
+    return next((p for p in candidates if p.exists()), None)
+
+
+def start_browser():
+    """Open the browser the human logs into, with debugging turned on.
+
+    Its profile lives beside this file, so the login survives restarts and is
+    kept away from the browser they use for everything else.
+    """
+    exe = browser_binary()
+    if exe is None:
+        raise Unavailable("browser_unavailable", "no Chrome, Chromium or Edge found")
+
+    port = CDP.rsplit(":", 1)[-1].rstrip("/")
+    args = [
+        str(exe),
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={PROFILE}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    # Chrome refuses to start as root unless sandboxing is off. Servers often
+    # run as root; a desktop never hits this.
+    if getattr(os, "geteuid", None) and os.geteuid() == 0:
+        args.append("--no-sandbox")
+    args.append("https://claude.ai/")
+
+    errlog = Path(tempfile.gettempdir()) / "claude-usage-browser.log"
+    kwargs = {"stdout": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True  # outlive this process
+
+    with open(errlog, "wb") as err:
+        proc = subprocess.Popen(args, stderr=err, **kwargs)
+
+    # Popen succeeding says only that the file was executable. Wait for the
+    # browser to actually offer a debugger before claiming it started.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(f"{CDP}/json/version", timeout=2).close()
+            return exe
+        except Exception:
+            if proc.poll() is not None:
+                break
+            time.sleep(1)
+
+    # Chrome is noisy, so its last line is a hint rather than the cause.
+    said = [ln for ln in errlog.read_text(errors="replace").splitlines() if ln.strip()]
+    detail = f"{exe} never offered a debugger on {CDP}"
+    if said:
+        detail += f"; last said: {said[-1]}"
+    raise Unavailable("browser_unavailable", detail)
 
 
 def ws_endpoint():
@@ -52,7 +137,8 @@ def ws_endpoint():
         with urllib.request.urlopen(f"{CDP}/json/version", timeout=10) as r:
             url = json.load(r)["webSocketDebuggerUrl"]
     except Exception as e:
-        raise Unavailable("browser_unavailable", e)
+        raise Unavailable(
+            "browser_unavailable", f"nothing at {CDP} ({e}); run check.py --login")
 
     authority = CDP.split("://", 1)[-1].rstrip("/")
     path = url.partition("://")[2].partition("/")[2]
@@ -197,7 +283,34 @@ def read_usage():
             return {"status": "request_failed", "detail": str(e)[:200]}
 
 
+def login():
+    """Open the browser so a human can sign in. Prints progress, not JSON."""
+    try:
+        urllib.request.urlopen(f"{CDP}/json/version", timeout=5).close()
+    except Exception:
+        pass
+    else:
+        print(f"A browser is already listening on {CDP}.")
+        print("Log into claude.ai there, then run this again without --login.")
+        return 0
+
+    try:
+        exe = start_browser()
+    except Unavailable as e:
+        print(json.dumps(e.payload, indent=2))
+        return 1
+
+    print(f"Started {exe}")
+    print(f"Profile: {PROFILE}")
+    print("\nLog into claude.ai in the window that opened, leave it running,")
+    print("then run this again without --login.")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--login" in sys.argv[1:]:
+        sys.exit(login())
+
     result = read_usage()
     print(json.dumps(result, indent=2))
     sys.exit(0 if result["status"] == "ok" else 1)

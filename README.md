@@ -66,36 +66,28 @@ already running, so `playwright install` is not needed.
 
 Then pick whichever fits your machine.
 
-### Option A: a browser you start yourself
+### Option A: on a machine with a screen
 
-Best if the machine has a screen. No Docker involved.
+No Docker involved.
 
-**Linux**
 ```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir=~/.claude-usage-profile
+python check.py --login
 ```
 
-**macOS**
+That finds Chrome, Chromium or Edge, opens claude.ai in it, and tells you what
+to do next: log in, leave the window running. Then:
+
 ```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 --user-data-dir=~/claude-usage-profile
+python check.py
 ```
 
-**Windows** (PowerShell)
-```powershell
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:USERPROFILE\claude-usage-profile"
-```
+If it can't find a browser or the browser fails to start, it says so and exits
+1 — it won't claim success and leave you guessing.
 
-**Windows** (cmd)
-```
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\claude-usage-profile"
-```
-
-Log into claude.ai in that window and leave it running. Then run the checker —
-`./check.py` on Linux and macOS, `python check.py` on Windows.
-
-> Use a separate `--user-data-dir`, not your everyday profile. A browser with
-> debugging enabled can be driven by anything else on your machine.
+> It uses its own profile directory (`browser-profile/`), not your everyday
+> one, and that is deliberate: a browser with debugging enabled can be driven
+> by anything else on your machine, so it should not be the browser holding the
+> rest of your logins.
 
 ### Option B: Docker
 
@@ -107,7 +99,7 @@ docker compose up -d
 ```
 
 Open <http://localhost:3000> — that's the Chromium holding the login. Go to
-claude.ai and log in. Then `./check.py`.
+claude.ai and log in. Then `python check.py`.
 
 Either way the checker looks at `localhost:9222` and needs no configuring.
 
@@ -146,7 +138,7 @@ All exit 1, with the reason in `status`:
 | Status | Means | Fix |
 |---|---|---|
 | `unauthenticated` | The login expired | Log in again in that browser |
-| `browser_unavailable` | The browser isn't reachable | Start it, or `docker compose up -d` |
+| `browser_unavailable` | The browser isn't reachable | `python check.py --login`, or `docker compose up -d` |
 | `blocked` | Cloudflare didn't clear | Usually temporary; try again |
 | `request_failed` | The endpoint changed, or something else | Check what `detail` says |
 
