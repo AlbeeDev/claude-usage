@@ -11,11 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from mcp.server.fastmcp import FastMCP
+try:
+    # mcp 2.x renamed FastMCP; the decorator and run() are otherwise the same.
+    from mcp.server.mcpserver import MCPServer as Server
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as Server
 
 from usage import read_usage
 
-mcp = FastMCP("claude-usage")
+mcp = Server("claude-usage")
 
 
 @mcp.tool(

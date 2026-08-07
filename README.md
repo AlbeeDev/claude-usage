@@ -160,19 +160,42 @@ Either way the checker looks at `localhost:9222` and needs no configuring.
 **CLI** — prints JSON, exits 0 on success, 1 on failure with the reason in
 `status`.
 
-**MCP** — register the server and any Claude session gets a `claude_usage` tool:
+**MCP** — register the server and any Claude session gets a `claude_usage` tool
+reporting `session_pct` and `resets_at`, so it can decide whether to keep going.
 
+Point `command` at the Python **inside your `.venv`**, not a bare `python3` —
+that is where the dependencies are, and the MCP client does not activate
+anything.
+
+**Linux, macOS**
 ```json
 {
   "mcpServers": {
     "claude-usage": {
       "type": "stdio",
-      "command": "python3",
-      "args": ["/path/to/claude-usage-mcp/mcp_server.py"]
+      "command": "/path/to/claude-usage/.venv/bin/python",
+      "args": ["/path/to/claude-usage/mcp_server.py"]
     }
   }
 }
 ```
+
+**Windows**
+```json
+{
+  "mcpServers": {
+    "claude-usage": {
+      "type": "stdio",
+      "command": "C:\\path\\to\\claude-usage\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\claude-usage\\mcp_server.py"]
+    }
+  }
+}
+```
+
+The tool reads the browser but never starts one — a window appearing because
+something polled your usage would be wrong. If the browser isn't running it
+returns `browser_unavailable`, and you start it with `./usage`.
 
 ## Failure statuses
 
