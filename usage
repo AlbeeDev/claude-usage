@@ -3,6 +3,11 @@
 set -e
 dir=$(dirname "$0")
 
+# A .venv beside this script wins, so it never has to be activated by hand.
+if [ -x "$dir/.venv/bin/python" ]; then
+    exec "$dir/.venv/bin/python" "$dir/usage.py" "$@"
+fi
+
 for py in python3 python; do
     if command -v "$py" >/dev/null 2>&1; then
         exec "$py" "$dir/usage.py" "$@"

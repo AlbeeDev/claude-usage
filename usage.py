@@ -148,7 +148,11 @@ def ws_endpoint():
 
 def fetch():
     """Ask the logged-in browser, from inside a page it opens itself."""
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise Unavailable("request_failed",
+                          "playwright is not installed — see Setup in the README")
 
     endpoint = ws_endpoint()
     with sync_playwright() as p:

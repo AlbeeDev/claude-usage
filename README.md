@@ -57,9 +57,23 @@ Windows, macOS and Linux all work. Docker is optional — see below.
 
 ## Setup
 
+**Linux, macOS**
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
+
+**Windows**
+```
+py -3 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+```
+
+You never have to activate it: `./usage` uses a `.venv` sitting next to it if
+there is one. Installing into your system Python instead works too, but most
+current Linux distributions refuse it — `pip` will say
+`error: externally-managed-environment` — so the virtual environment is the path
+that works everywhere.
 
 No browser download: `playwright` is used only to talk to a browser that is
 already running, so `playwright install` is not needed.
