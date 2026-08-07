@@ -38,7 +38,12 @@ services:
     network_mode: "service:browser"
     command: TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222
     depends_on:
-      - browser
+      browser:
+        condition: service_started
+        # Sharing a namespace means sharing its lifetime: when the browser
+        # restarts it gets a new one, and a bridge left in the old one listens
+        # where nothing can reach it. Restarting alongside keeps them together.
+        restart: true
     restart: unless-stopped
 
 volumes:
