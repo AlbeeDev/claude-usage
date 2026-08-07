@@ -34,10 +34,10 @@ shortcut: an HTTP client sending perfectly valid cookies still gets `403` with
 neither does replaying a complete browser header set. What is being
 fingerprinted is the client itself.
 
-So this runs a Chromium in a container, you log into it once by hand, and it
-keeps running. `check.py` connects to that same browser and asks the question
-from inside a page — which is what the site's own settings modal does. Nothing
-copies cookies out, and no second browser is launched.
+So you keep a browser logged in — one you start yourself, or the container in
+`docker-compose.yml` — and `check.py` connects to that same browser and asks the
+question from inside a page, which is what the site's own settings modal does.
+Nothing copies cookies out, and no browser is launched behind your back.
 
 **This reads your own account through your own logged-in session.** No API key,
 no token, nothing sanctioned — and therefore best-effort by nature. Don't build
@@ -47,29 +47,64 @@ anything critical on top of it.
 
 A browser holding a login is not a zero-maintenance thing:
 
-- **Docker**, and a machine that stays on. The browser has to keep existing.
+- **A browser that keeps running**, logged into your account, on a machine that
+  stays on.
 - **One manual login**, by hand, in that browser.
 - **Logging in again roughly monthly**, when the session expires. This never
   goes away.
 
+Windows, macOS and Linux all work. Docker is optional — see below.
+
 ## Setup
 
 ```bash
-docker compose up -d
 pip install -r requirements.txt
 ```
 
-No browser download — `playwright` is only used to talk to the one in the
-container, so `playwright install` is not needed.
+No browser download: `playwright` is used only to talk to a browser that is
+already running, so `playwright install` is not needed.
 
-Open <http://localhost:3000>, which is the Chromium holding the login. Go to
-claude.ai and log in. Then:
+Then pick whichever fits your machine.
 
+### Option A: a browser you start yourself
+
+Best if the machine has a screen. No Docker involved.
+
+**Linux**
 ```bash
-./check.py
+google-chrome --remote-debugging-port=9222 --user-data-dir=~/.claude-usage-profile
 ```
 
-That's the whole setup.
+**macOS**
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir=~/claude-usage-profile
+```
+
+**Windows**
+```
+"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\claude-usage-profile"
+```
+
+Log into claude.ai in that window and leave it running. Then `./check.py`.
+
+> Use a separate `--user-data-dir`, not your everyday profile. A browser with
+> debugging enabled can be driven by anything else on your machine.
+
+### Option B: Docker
+
+Best on a headless server, where the point is having a screen to log in
+through.
+
+```bash
+docker compose up -d
+```
+
+Open <http://localhost:3000> — that's the Chromium holding the login. Go to
+claude.ai and log in. Then `./check.py`.
+
+Either way the checker looks at `localhost:9222` and needs no configuring.
 
 > Reaching that UI from another machine needs HTTPS, because the page uses
 > browser features that plain HTTP won't allow off localhost. Port `3001` serves
@@ -105,8 +140,8 @@ All exit 1, with the reason in `status`:
 
 | Status | Means | Fix |
 |---|---|---|
-| `unauthenticated` | The login expired | Log in again at <http://localhost:3000> |
-| `browser_unavailable` | The container isn't reachable | `docker compose up -d` |
+| `unauthenticated` | The login expired | Log in again in that browser |
+| `browser_unavailable` | The browser isn't reachable | Start it, or `docker compose up -d` |
 | `blocked` | Cloudflare didn't clear | Usually temporary; try again |
 | `request_failed` | The endpoint changed, or something else | Check what `detail` says |
 
@@ -117,13 +152,16 @@ and show "usage unavailable" rather than zero.
 
 ## Notes
 
-The checker caches for 60 seconds and serializes concurrent callers, so polling
-it is cheap.
+The checker caches for 60 seconds, and on Linux and macOS it also serializes
+concurrent callers with a file lock. Windows has no such lock, so there the
+cache is the only guard — enough for what it protects against, a couple of extra
+tabs for a moment.
 
-If your browser is somewhere else, point the checker at it:
+The checker defaults to `http://localhost:9222`. If your browser is elsewhere,
+point it there:
 
 ```bash
-USAGE_CDP_URL=http://other-host:9223 ./check.py
+USAGE_CDP_URL=http://other-host:9222 ./check.py
 ```
 
 ## Tests

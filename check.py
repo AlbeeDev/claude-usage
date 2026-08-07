@@ -2,26 +2,31 @@
 """Read Claude plan usage and print it as JSON.
 
 Cloudflare challenges any client that is not a genuine browser session, so the
-numbers cannot be fetched over plain HTTP. A Chromium container holds the login
-— a human logs into it once, by hand — and this connects to that same browser
-and asks the question from inside a page, where it is indistinguishable from
-the site's own request. Nothing copies cookies and nothing launches a second
-browser. See README.
+numbers cannot be fetched over plain HTTP. Instead a browser you are logged
+into — one you started with --remote-debugging-port, or the container in
+docker-compose.yml — is asked the question from inside a page, where it is
+indistinguishable from the site's own request. Nothing copies cookies and
+nothing launches a browser of its own. See README.
 
 Exit codes: 0 = usage read, 1 = usage unavailable (reason in the JSON).
 Also exposed as an MCP tool by mcp_server.py, which calls read_usage().
 """
 
-import fcntl
 import json
 import os
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
 HERE = Path(__file__).parent
-CDP = os.environ.get("USAGE_CDP_URL", "http://localhost:9223")
+CDP = os.environ.get("USAGE_CDP_URL", "http://localhost:9222")
 CACHE = HERE / ".cache.json"
 LOCK = HERE / ".lock"
 CACHE_TTL = 60          # seconds; several callers may check at once
@@ -154,16 +159,30 @@ def cached():
     return None
 
 
+@contextmanager
+def one_at_a_time():
+    """Keep parallel callers from each opening their own page.
+
+    Windows has no fcntl, and there the 60-second cache is the only guard. That
+    is enough for what this protects against — a few extra tabs, briefly.
+    """
+    if fcntl is None:
+        yield
+        return
+
+    LOCK.touch(exist_ok=True)
+    with open(LOCK, "r+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def read_usage():
     """Return the usage digest. Always a dict; check its "status" field."""
     hit = cached()
     if hit:
         return hit
 
-    # One caller at a time — parallel runs would each open their own page.
-    LOCK.touch(exist_ok=True)
-    with open(LOCK, "r+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with one_at_a_time():
         hit = cached()  # another run may have refreshed while we waited
         if hit:
             return hit

@@ -63,7 +63,8 @@ def test_ws_endpoint_ignores_the_browsers_own_loopback():
     original = urllib.request.urlopen
     urllib.request.urlopen = lambda *a, **k: io.BytesIO(json.dumps(advertised).encode())
     try:
-        assert check.ws_endpoint() == "ws://localhost:9223/devtools/browser/abc-123"
+        authority = check.CDP.split("://", 1)[-1].rstrip("/")
+        assert check.ws_endpoint() == f"ws://{authority}/devtools/browser/abc-123"
     finally:
         urllib.request.urlopen = original
 
