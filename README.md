@@ -193,7 +193,7 @@ All exit 1, with the reason in `status` and detail in `detail`.
 | Status | Meaning | Fix |
 |---|---|---|
 | `unauthenticated` | The login expired | `./usage --login`, then sign in |
-| `browser_unavailable` | No browser reachable | `./usage`, or `docker compose up -d` |
+| `browser_unavailable` | No browser reachable, or one that stopped answering | `./usage`, or `docker compose up -d`. If `detail` says it answers HTTP but not the debug protocol, restart the browser |
 | `blocked` | Cloudflare did not clear | Usually temporary; retry |
 | `request_failed` | Endpoint changed, or another error | Read `detail` |
 
@@ -225,6 +225,10 @@ USAGE_CDP_URL=http://other-host:9222 ./usage
   with debugging enabled can be driven by anything else on the machine.
 - Closing the browser does not lose the login — it is on disk. `./usage` starts
   it again.
+- A browser left running for a long time can keep answering the debugger's HTTP
+  side while its debug protocol stops replying. The reading then fails with
+  `browser_unavailable` saying exactly that, and restarting the browser fixes
+  it — nothing else does, so it will not try to start a second one.
 
 ## How it works
 

@@ -79,6 +79,13 @@ def start_browser():
     Its profile lives beside this file, so the login survives restarts and is
     kept away from the browser they use for everything else.
     """
+    # Whatever is already on the port would answer the check below and make a
+    # launch that achieved nothing look like a success.
+    if browser_answers_http() is not None:
+        raise Unavailable("browser_unavailable",
+                          f"{describe_browser()}; restart that browser rather than "
+                          f"starting another")
+
     exe = browser_binary()
     if exe is None:
         raise Unavailable("browser_unavailable", "no Chrome, Chromium or Edge found")
@@ -147,6 +154,34 @@ def start_browser():
             pass
 
 
+def browser_answers_http(timeout=5):
+    """Whether anything is serving the debugger's HTTP side.
+
+    Worth asking separately, because Chrome answers these while its debug
+    protocol is wedged — the two live on different threads. "Nothing there" and
+    "there but not listening to us" need different advice.
+    """
+    try:
+        with urllib.request.urlopen(f"{CDP}/json/version", timeout=timeout) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+
+def describe_browser():
+    """A line about what is on the port, for when talking to it fails."""
+    info = browser_answers_http()
+    if info is None:
+        return f"nothing is listening on {CDP}"
+    try:
+        with urllib.request.urlopen(f"{CDP}/json/list", timeout=5) as r:
+            targets = len(json.load(r))
+    except Exception:
+        targets = "?"
+    return (f"{info.get('Browser', 'a browser')} on {CDP} answers HTTP "
+            f"({targets} targets) but not the debug protocol")
+
+
 def ws_endpoint():
     """Where to talk to the browser.
 
@@ -192,7 +227,11 @@ def fetch():
         try:
             browser = p.chromium.connect_over_cdp(endpoint, timeout=30000)
         except Exception as e:
-            raise Unavailable("browser_unavailable", e)
+            # The socket opening says nothing: Chrome accepts the connection on
+            # one thread and answers it on another. Say which of those failed,
+            # since restarting the browser fixes one and not the other.
+            raise Unavailable("browser_unavailable",
+                              f"{describe_browser()} — {str(e).splitlines()[0]}")
 
         # close() here drops our connection; it does not close the human's
         # browser, which has to keep running to hold the login.
@@ -344,7 +383,10 @@ def open_login_page():
         browser = p.chromium.connect_over_cdp(ws_endpoint(), timeout=30000)
         try:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-            ctx.new_page().goto("https://claude.ai/login", wait_until="domcontentloaded")
+            # Reuse the claude.ai tab rather than leaving one behind per run.
+            page = next((pg for pg in ctx.pages
+                         if pg.url.startswith("https://claude.ai")), None) or ctx.new_page()
+            page.goto("https://claude.ai/login", wait_until="domcontentloaded")
         finally:
             browser.close()
 
@@ -488,7 +530,16 @@ def cli(argv):
 
     result = read_usage()
 
-    if result["status"] == "browser_unavailable" and CDP == DEFAULT_CDP:
+    # A browser that is there but not answering needs restarting, not company.
+    # Worth saying wherever it is, so this advice is not tied to the default
+    # address the way starting one has to be.
+    if result["status"] == "browser_unavailable" and browser_answers_http() is not None:
+        print(f"{describe_browser()}.\n\n"
+              "Restart it — `docker compose restart browser` if it is the\n"
+              "container, or close and reopen the window if you started it\n"
+              "yourself — then run this again.", file=sys.stderr)
+
+    elif result["status"] == "browser_unavailable" and CDP == DEFAULT_CDP:
         print("No browser is running. Starting one...", file=sys.stderr)
         try:
             exe = start_browser()
