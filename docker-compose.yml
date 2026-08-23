@@ -20,7 +20,10 @@ services:
       - PUID=0
       - PGID=0
       - TZ=Etc/UTC
-      - CHROME_CLI=--remote-debugging-port=9222
+      # about:blank on purpose: the image's default start page is a live
+      # DuckDuckGo page, and one left open for a week reached 1.7GB on its
+      # own. Nothing here needs a start page.
+      - CHROME_CLI=--remote-debugging-port=9222 about:blank
     volumes:
       - browser-profile:/config
     ports:

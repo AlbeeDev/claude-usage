@@ -215,7 +215,15 @@ def open_claude(page):
 
 
 def fetch():
-    """Ask the logged-in browser, from a claude.ai tab it leaves open."""
+    """Ask the logged-in browser, from a claude.ai tab.
+
+    Whatever this opens, it closes. A page left open lives as long as the
+    browser does, so anything it accumulates is permanent — a claude.ai tab
+    parked for four days reached 500MB, and the container's own start page
+    reached 1.7GB in seven. Closing the tab ends its renderer and returns the
+    memory, so the fix is to own the page's lifetime rather than to cap what it
+    may grow to. A tab somebody else opened is theirs and is left alone.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -238,15 +246,13 @@ def fetch():
         try:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
 
-            # Reuse a claude.ai tab if one is open. Opening a tab and navigating
-            # it pulls the window to the front, which is intolerable for
-            # something that may run every few minutes; asking a tab that is
-            # already sitting there disturbs nothing. The tab is left open
-            # afterwards, which is what keeps later runs quiet.
+            # Borrow a claude.ai tab if one is already open — someone is using
+            # that browser, and opening a second tab would pull their window to
+            # the front. Otherwise open one, which we then own and close.
             page = next((pg for pg in ctx.pages
                          if pg.url.startswith("https://claude.ai")), None)
-            fresh = page is None
-            if fresh:
+            ours = page is None
+            if ours:
                 page = ctx.new_page()
                 open_claude(page)
 
@@ -271,14 +277,23 @@ def fetch():
                 return api(f"/api/organizations/{chat[0]['uuid']}/usage")
 
             try:
-                return read()
-            except Unavailable:
-                if fresh:
-                    raise
-                # The tab we borrowed was stale — sitting on a challenge or an
-                # error page. Reload it and try once more before giving up.
-                open_claude(page)
-                return read()
+                try:
+                    return read()
+                except Unavailable:
+                    if ours:
+                        raise
+                    # The tab we borrowed was stale — sitting on a challenge or
+                    # an error page. Reload it and try once more before giving up.
+                    open_claude(page)
+                    return read()
+            finally:
+                # Ours to close, on the way out of every path including failure.
+                # Its renderer dies with it, which is what keeps memory flat.
+                if ours:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
         finally:
             browser.close()
 
@@ -525,7 +540,9 @@ def cli(argv):
         except Unavailable:
             pass  # no browser to open a page in; the usual path starts one
         else:
-            print("Opened claude.ai in the running browser. Sign in there.", file=sys.stderr)
+            print("Opened claude.ai in the running browser. Sign in there,\n"
+                  "then close that tab — the session is saved to disk, and a page\n"
+                  "left open grows for as long as the browser runs.", file=sys.stderr)
             return 0
 
     result = read_usage()

@@ -90,7 +90,10 @@ Then forward the port from your own machine and open
 ssh -L 3000:localhost:3000 you@your-server
 ```
 
-Log into claude.ai there. Back on the server:
+Log into claude.ai there, then **close that tab** — leave the blank one, which
+keeps the browser alive. The session is saved to disk, so the tab is only needed
+for typing your password, and a page left open accumulates memory for as long as
+the browser runs. Back on the server:
 
 ```bash
 python3 -m venv .venv
@@ -217,8 +220,10 @@ USAGE_CDP_URL=http://other-host:9222 ./usage
 - Results are cached for 60 seconds; polling is cheap.
 - Concurrent callers are serialised with a file lock on macOS and Linux. Windows
   has no such lock, so the cache is the only guard there.
-- One claude.ai tab is opened on first use and reused after, so nothing opens,
-  navigates or takes focus while you work.
+- A claude.ai tab is opened per reading and closed again, so the browser keeps
+  no page alive between runs and its memory stays flat. If you already have
+  claude.ai open, that tab is used instead and left exactly as it was — nothing
+  of yours is opened, navigated or closed.
 - On Windows the browser starts minimised once a profile exists. The first run
   stays visible, because that is the run you log in on.
 - The browser uses its own profile directory, not your everyday one. A browser
