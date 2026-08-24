@@ -8,7 +8,9 @@ Nothing here touches a browser or the network. Run with pytest, or directly:
 
 import io
 import json
+import tempfile
 import urllib.request
+from pathlib import Path
 
 import usage
 
@@ -84,6 +86,37 @@ def test_ws_endpoint_reports_an_unreachable_browser():
         raise AssertionError("an unreachable browser should be reported")
     finally:
         urllib.request.urlopen = original
+
+
+def test_cache_is_keyed_per_account():
+    # Serving one account's numbers for another is the failure the whole
+    # multi-account feature exists to avoid, and the cache is where it would
+    # happen quietly.
+    original = usage.CACHE
+    with tempfile.TemporaryDirectory() as tmp:
+        usage.CACHE = Path(tmp) / "cache.json"
+        try:
+            usage.remember("pro", {"status": "ok", "session_pct": 10.0})
+            usage.remember("team", {"status": "ok", "session_pct": 90.0})
+            assert usage.cached("pro")["session_pct"] == 10.0
+            assert usage.cached("team")["session_pct"] == 90.0
+            assert usage.cached(None) is None, "no account must not read an account's"
+            usage.remember(None, {"status": "ok", "session_pct": 50.0})
+            assert usage.cached(None)["session_pct"] == 50.0
+            assert usage.cached("pro")["session_pct"] == 10.0, "must not be clobbered"
+        finally:
+            usage.CACHE = original
+
+
+def test_session_cookies_are_recognised_by_name():
+    # All four sessionKey variants must move together: with only sessionKey
+    # swapped the previous account stays authenticated and the numbers are
+    # attributed to the wrong one.
+    for name in ("sessionKey", "sessionKeyLC", "sessionKeyV3", "sessionKeyV3LC",
+                 "lastActiveOrg"):
+        assert usage.is_session_cookie(name), name
+    for name in ("cf_clearance", "__cf_bm", "_cfuvid", "anthropic-device-id"):
+        assert not usage.is_session_cookie(name), name
 
 
 if __name__ == "__main__":

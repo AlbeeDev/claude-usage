@@ -34,6 +34,7 @@ CDP = os.environ.get("USAGE_CDP_URL", DEFAULT_CDP)
 CACHE = HERE / ".cache.json"
 LOCK = HERE / ".lock"
 PROFILE = HERE / "browser-profile"
+ACCOUNTS = HERE / "accounts.json"
 CACHE_TTL = 60          # seconds; several callers may check at once
 CHALLENGE_TIMEOUT = 60  # seconds to let Cloudflare clear
 
@@ -201,6 +202,49 @@ def ws_endpoint():
     return f"ws://{authority}/{path}"
 
 
+# Four cookies carry the session, not one: sessionKey, sessionKeyLC,
+# sessionKeyV3, sessionKeyV3LC. Measured — with sessionKey alone removed the
+# request still authenticates, so swapping only that leaves the previous account
+# signed in and the numbers belong to the wrong account. Everything with this
+# prefix moves together. lastActiveOrg comes along because it selects between an
+# account's organisations. Cloudflare's cookies are deliberately left alone: they
+# are per browser, not per account, so keeping them avoids a fresh challenge on
+# every switch.
+SESSION_PREFIX = "sessionKey"
+SESSION_ALSO = ("lastActiveOrg",)
+COOKIE_FIELDS = ("name", "value", "domain", "path", "expires", "httpOnly",
+                 "secure", "sameSite")
+
+
+def is_session_cookie(name):
+    return name.startswith(SESSION_PREFIX) or name in SESSION_ALSO
+
+
+def load_accounts():
+    try:
+        return json.loads(ACCOUNTS.read_text())
+    except Exception:
+        return {}
+
+
+def save_accounts(store):
+    ACCOUNTS.write_text(json.dumps(store, indent=2))
+    os.chmod(ACCOUNTS, 0o600)  # live sessions; nobody else's business
+
+
+def session_cookies(ctx):
+    return [{k: c[k] for k in COOKIE_FIELDS if k in c}
+            for c in ctx.cookies("https://claude.ai") if is_session_cookie(c["name"])]
+
+
+def install_account(ctx, entry):
+    """Make the browser be this account, for the next request at least."""
+    for c in ctx.cookies("https://claude.ai"):
+        if is_session_cookie(c["name"]):
+            ctx.clear_cookies(name=c["name"])
+    ctx.add_cookies(entry["cookies"])
+
+
 def open_claude(page):
     """Put a page on claude.ai and wait for Cloudflare to be done with it."""
     page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
@@ -214,8 +258,8 @@ def open_claude(page):
     raise Unavailable("blocked", "Cloudflare challenge did not clear")
 
 
-def fetch():
-    """Ask the logged-in browser, from a claude.ai tab.
+def fetch(account=None):
+    """Ask the browser for an account's usage. Returns (usage, org_uuid).
 
     Whatever this opens, it closes. A page left open lives as long as the
     browser does, so anything it accumulates is permanent — a claude.ai tab
@@ -246,11 +290,22 @@ def fetch():
         try:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
 
+            entry = None
+            if account is not None:
+                entry = load_accounts().get(account)
+                if entry is None:
+                    raise Unavailable("unauthenticated",
+                                      f"no stored session for account {account!r} — "
+                                      f"log into it and run --capture-account {account}")
+                install_account(ctx, entry)
+
             # Borrow a claude.ai tab if one is already open — someone is using
             # that browser, and opening a second tab would pull their window to
-            # the front. Otherwise open one, which we then own and close.
-            page = next((pg for pg in ctx.pages
-                         if pg.url.startswith("https://claude.ai")), None)
+            # the front. Otherwise open one, which we then own and close. With an
+            # account requested we always use our own tab: a borrowed one belongs
+            # to whoever is signed in there.
+            page = None if entry else next(
+                (pg for pg in ctx.pages if pg.url.startswith("https://claude.ai")), None)
             ours = page is None
             if ours:
                 page = ctx.new_page()
@@ -274,7 +329,17 @@ def fetch():
                 if not chat:
                     raise Unavailable("request_failed",
                                       "no chat-capable organization on this account")
-                return api(f"/api/organizations/{chat[0]['uuid']}/usage")
+                uuid = chat[0]["uuid"]
+                # The swap is the part that can fail quietly: if the cookies did
+                # not take, this reads the previous account and looks perfectly
+                # healthy. Refuse rather than attribute numbers to the wrong
+                # account — that is the one outcome worse than an error here.
+                if entry and uuid not in entry["org_uuids"]:
+                    raise Unavailable(
+                        "request_failed",
+                        f"read organization {uuid} but account {account!r} is "
+                        f"{', '.join(entry['org_uuids'])}; session swap did not take")
+                return api(f"/api/organizations/{uuid}/usage"), uuid
 
             try:
                 try:
@@ -337,14 +402,29 @@ def digest(u):
     }
 
 
-def cached():
+def cached(account=None):
+    """Cached reading for this account, if it is still fresh.
+
+    Keyed per account: serving one account's numbers for another, even for a
+    minute after a switch, is the failure this whole feature exists to avoid.
+    """
     try:
-        c = json.loads(CACHE.read_text())
+        c = json.loads(CACHE.read_text()).get(account or "", {})
         if time.time() - c["ts"] < CACHE_TTL:
             return c["data"]
     except Exception:
         pass
     return None
+
+
+def remember(account, data):
+    try:
+        store = json.loads(CACHE.read_text())
+    except Exception:
+        store = {}
+    store[account or ""] = {"ts": time.time(), "data": data}
+    CACHE.write_text(json.dumps(store))
+    os.chmod(CACHE, 0o600)  # your usage and spend are nobody else's
 
 
 @contextmanager
@@ -364,26 +444,105 @@ def one_at_a_time():
         yield
 
 
-def read_usage():
-    """Return the usage digest. Always a dict; check its "status" field."""
-    hit = cached()
+def read_usage(account=None):
+    """Return the usage digest. Always a dict; check its "status" field.
+
+    With an account id, the reading is for that account's stored session rather
+    than whichever one the browser happens to be logged into.
+    """
+    hit = cached(account)
     if hit:
         return hit
 
     with one_at_a_time():
-        hit = cached()  # another run may have refreshed while we waited
+        hit = cached(account)  # another run may have refreshed while we waited
         if hit:
             return hit
         try:
-            data = digest(fetch())
+            usage, org_uuid = fetch(account)
+            data = digest(usage)
             data["source"] = "browser"
-            CACHE.write_text(json.dumps({"ts": time.time(), "data": data}))
-            os.chmod(CACHE, 0o600)  # your usage and spend are nobody else's
+            data["account"] = account
+            data["org_uuid"] = org_uuid
+            remember(account, data)
             return data
         except Unavailable as e:
             return e.payload
         except Exception as e:
             return {"status": "request_failed", "detail": str(e)[:200]}
+
+
+def capture_account(account):
+    """Store the session the browser is signed into right now, under this id."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise Unavailable("request_failed", "playwright is not installed")
+
+    endpoint = ws_endpoint()
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(endpoint, timeout=30000)
+        try:
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            cookies = session_cookies(ctx)
+            if not any(c["name"].startswith(SESSION_PREFIX) for c in cookies):
+                raise Unavailable("unauthenticated",
+                                  "that browser is not signed in to anything")
+            page = ctx.new_page()
+            try:
+                open_claude(page)
+                r = page.evaluate("""async () => {
+                    const res = await fetch('/api/organizations',
+                        {cache: 'no-store', headers: {'Accept': 'application/json'}});
+                    return {status: res.status, body: await res.text()};
+                }""")
+                if r["status"] != 200:
+                    raise Unavailable("unauthenticated",
+                                      f"HTTP {r['status']} reading organizations")
+                orgs = json.loads(r["body"])
+            finally:
+                page.close()
+        finally:
+            browser.close()
+
+    uuids = [o["uuid"] for o in orgs]
+    names = [o.get("name", "?") for o in orgs]
+    store = load_accounts()
+    clash = [a for a, e in store.items()
+             if a != account and set(e["org_uuids"]) & set(uuids)]
+    store[account] = {"org_uuids": uuids, "org_names": names,
+                      "captured_at": int(time.time()), "cookies": cookies}
+    save_accounts(store)
+
+    print(f"Captured account {account!r}")
+    for u, n in zip(uuids, names):
+        print(f"  {u}  {n}")
+    expiries = [c.get("expires") for c in cookies if c.get("expires", -1) > 0]
+    if expiries:
+        days = (min(expiries) - time.time()) / 86400
+        print(f"  session expires in about {days:.0f} days")
+    print(f"  stored in {ACCOUNTS} (0600)")
+    if clash:
+        print(f"\n  WARNING: the same organisation is already stored under "
+              f"{', '.join(repr(c) for c in clash)}.\n"
+              f"  Sign in as the other account first, then capture again — "
+              f"otherwise both ids read the same account.")
+        return 1
+    return 0
+
+
+def list_accounts():
+    store = load_accounts()
+    if not store:
+        print("No accounts captured. Log into one, then: usage --capture-account <id>")
+        return 0
+    for account, e in sorted(store.items()):
+        expiries = [c.get("expires") for c in e["cookies"] if c.get("expires", -1) > 0]
+        when = (f"{(min(expiries) - time.time()) / 86400:.0f} days"
+                if expiries else "unknown")
+        print(f"  {account:12s} {', '.join(e.get('org_names') or e['org_uuids'])}")
+        print(f"  {'':12s} session expires in {when}")
+    return 0
 
 
 def open_login_page():
@@ -534,6 +693,29 @@ def cli(argv):
     if "--register-mcp" in argv:
         return register_mcp()
 
+    if "--accounts" in argv:
+        return list_accounts()
+
+    if "--capture-account" in argv:
+        i = argv.index("--capture-account")
+        if i + 1 >= len(argv):
+            print("usage: --capture-account <id>", file=sys.stderr)
+            return 1
+        try:
+            return capture_account(argv[i + 1])
+        except Unavailable as e:
+            print(json.dumps(e.payload, indent=2))
+            return 1
+
+    # Burrow sets the env var; --account is for people at a terminal.
+    account = os.environ.get("BURROW_USAGE_ACCOUNT") or None
+    if "--account" in argv:
+        i = argv.index("--account")
+        if i + 1 >= len(argv):
+            print("usage: --account <id>", file=sys.stderr)
+            return 1
+        account = argv[i + 1]
+
     if "--login" in argv:
         try:
             open_login_page()
@@ -545,7 +727,7 @@ def cli(argv):
                   "left open grows for as long as the browser runs.", file=sys.stderr)
             return 0
 
-    result = read_usage()
+    result = read_usage(account)
 
     # A browser that is there but not answering needs restarting, not company.
     # Worth saying wherever it is, so this advice is not tied to the default
@@ -569,7 +751,7 @@ def cli(argv):
         print(f"Started {exe}", file=sys.stderr)
         # The profile usually still holds a login — closing the window loses the
         # connection, not the session — so read rather than assume a sign-in.
-        result = read_usage()
+        result = read_usage(account)
 
     if result["status"] == "unauthenticated":
         print("Not logged in. Sign into claude.ai in the browser that is already\n"

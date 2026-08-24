@@ -28,7 +28,7 @@ $ ./usage
 - MCP tool, so Claude can check its own remaining usage
 - Works on Windows, macOS and Linux
 - Docker optional — needed only on machines without a screen
-- No API key, no cookie extraction, no browser download
+- No API key, no browser download; several accounts from one browser
 
 ## Requirements
 
@@ -138,6 +138,10 @@ will not overwrite a file it did not create.
 ./usage --login          # open claude.ai in the running browser, to sign in again
 ./usage --register-mcp   # register the MCP server with Claude Code
 ./usage --add-to-path    # install as claude-usage, runnable from anywhere
+
+./usage --capture-account <id>   # remember the account now signed in, under this id
+./usage --accounts               # list captured accounts and when they expire
+./usage --account <id>           # read that account instead of whoever is signed in
 ```
 
 On Windows, `usage` instead of `./usage`.
@@ -172,6 +176,41 @@ On Windows the interpreter is `.venv\Scripts\python.exe`.
 The tool reads the browser but never starts one. If none is running it returns
 `browser_unavailable`; start it with `./usage`.
 
+## More than one account
+
+If you have several Claude accounts, one browser can still serve them all. Log
+into each one in turn and capture it:
+
+```bash
+./usage --capture-account pro     # while signed in as that account
+# sign in as the other account in the browser UI, then:
+./usage --capture-account team
+```
+
+Then read either, without logging in again:
+
+```bash
+./usage --account team
+BURROW_USAGE_ACCOUNT=team ./usage   # same thing, for callers that set env vars
+```
+
+With no `--account`, nothing changes: you get whoever the browser is signed in
+as, exactly as before.
+
+How it works: each account's claude.ai session cookies are stored in
+`accounts.json` (mode `0600`) and installed before the reading. Cloudflare's
+cookies are left alone, so switching does not trigger a fresh challenge. Only
+one browser is needed no matter how many accounts you have.
+
+Every reading checks that the organisation it read matches the account asked
+for, and fails with `request_failed` if not. A session that silently failed to
+install would otherwise return the *previous* account's numbers under the
+requested name, which is worse than an error.
+
+`accounts.json` holds live sessions. It is gitignored and readable only by you,
+but it is a credential file — the honest cost of not running one browser per
+account. Sessions expire roughly monthly; `./usage --accounts` shows when.
+
 ## Output
 
 | Field | Meaning |
@@ -185,6 +224,8 @@ The tool reads the browser but never starts one. If none is running it returns
 | `credits_enabled` | Whether extra usage credits are on |
 | `credits_spent` / `credits_limit` | Credit spend, if enabled |
 | `source` | Always `browser` |
+| `account` | The account id asked for, or `null` |
+| `org_uuid` | Which organisation the numbers are for |
 
 `blocking` can name a model that is exhausted while both percentages still look
 healthy.
