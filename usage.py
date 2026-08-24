@@ -291,12 +291,18 @@ def fetch(account=None):
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
 
             entry = None
+            previous = None
             if account is not None:
                 entry = load_accounts().get(account)
                 if entry is None:
                     raise Unavailable("unauthenticated",
                                       f"no stored session for account {account!r} — "
                                       f"log into it and run --capture-account {account}")
+                # Remember what was signed in so it can be put back. Installing
+                # an account writes to the browser's own cookie jar, and leaving
+                # it changed would sign a person out of whatever they were using
+                # this browser for.
+                previous = session_cookies(ctx)
                 install_account(ctx, entry)
 
             # Borrow a claude.ai tab if one is already open — someone is using
@@ -357,6 +363,12 @@ def fetch(account=None):
                 if ours:
                     try:
                         page.close()
+                    except Exception:
+                        pass
+                # Put the browser back the way it was found.
+                if previous is not None:
+                    try:
+                        install_account(ctx, {"cookies": previous})
                     except Exception:
                         pass
         finally:
