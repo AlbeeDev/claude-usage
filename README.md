@@ -251,6 +251,7 @@ and show "usage unavailable" rather than zero.
 | Variable | Default | Purpose |
 |---|---|---|
 | `USAGE_CDP_URL` | `http://localhost:9222` | Where the browser is |
+| `USAGE_IDLE_TAB_MAX_MB` | `250` | Recycle the idle tab past this heap size |
 
 ```bash
 USAGE_CDP_URL=http://other-host:9222 ./usage
@@ -271,6 +272,13 @@ USAGE_CDP_URL=http://other-host:9222 ./usage
   with debugging enabled can be driven by anything else on the machine.
 - Closing the browser does not lose the login — it is on disk. `./usage` starts
   it again.
+- The idle tab that keeps the browser alive is replaced once its heap passes
+  `USAGE_IDLE_TAB_MAX_MB`. A replacement opens before the old one closes, so the
+  tab count never reaches zero and the browser never restarts — but the old
+  renderer dies and its memory is returned. Without this the browser creeps
+  upward forever: every reading commits a few hundred KB of V8 heap in that
+  process which is never given back, and no amount of garbage collection helps
+  because none of it is garbage.
 - A browser left running for a long time can keep answering the debugger's HTTP
   side while its debug protocol stops replying. The reading then fails with
   `browser_unavailable` saying exactly that, and restarting the browser fixes

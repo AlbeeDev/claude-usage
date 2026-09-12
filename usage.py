@@ -37,6 +37,7 @@ PROFILE = HERE / "browser-profile"
 ACCOUNTS = HERE / "accounts.json"
 CACHE_TTL = 60          # seconds; several callers may check at once
 CHALLENGE_TIMEOUT = 60  # seconds to let Cloudflare clear
+IDLE_TAB_MAX_MB = int(os.environ.get("USAGE_IDLE_TAB_MAX_MB", "250"))
 
 
 class Unavailable(Exception):
@@ -245,6 +246,52 @@ def install_account(ctx, entry):
     ctx.add_cookies(entry["cookies"])
 
 
+def recycle_idle_tabs(ctx):
+    """Replace a bloated idle tab with a fresh one, keeping the browser alive.
+
+    The blank tab exists so Chrome does not exit when the reading tab closes,
+    which makes its renderer immortal — and an immortal renderer only grows.
+    Every reading commits a few hundred KB of V8 heap there that is never
+    returned to the OS: measured at ~530KB a reading, 800MB in a fortnight, with
+    a forced garbage collection freeing none of it because none of it is
+    garbage. It is committed capacity, and only ending the process gives it
+    back.
+
+    So end the process, without ending the browser: open the replacement first,
+    then close the old tab. The count never reaches zero, so Chrome stays up and
+    no reading fails, while the renderer dies and its memory comes back.
+
+    Idle tabs only. A claude.ai tab belongs to whoever opened it.
+    """
+    idle = [pg for pg in ctx.pages if not pg.url.startswith("https://claude.ai")]
+    bloated = []
+    for pg in idle:
+        try:
+            mb = (pg.evaluate("() => (performance.memory || {}).usedJSHeapSize || 0")
+                  or 0) / 1048576
+        except Exception:
+            continue
+        if mb >= IDLE_TAB_MAX_MB:
+            bloated.append(pg)
+
+    if not bloated:
+        return 0
+
+    fresh = ctx.new_page()  # up first, so the count never touches zero
+    try:
+        fresh.goto("about:blank", timeout=15000)
+    except Exception:
+        pass
+    closed = 0
+    for pg in bloated:
+        try:
+            pg.close()
+            closed += 1
+        except Exception:
+            pass
+    return closed
+
+
 def open_claude(page):
     """Put a page on claude.ai and wait for Cloudflare to be done with it."""
     page.goto("https://claude.ai/", wait_until="domcontentloaded", timeout=60000)
@@ -371,6 +418,11 @@ def fetch(account=None):
                         install_account(ctx, {"cookies": previous})
                     except Exception:
                         pass
+                # Housekeeping, never allowed to affect the reading.
+                try:
+                    recycle_idle_tabs(ctx)
+                except Exception:
+                    pass
         finally:
             browser.close()
 
