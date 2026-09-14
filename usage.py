@@ -550,6 +550,113 @@ def read_usage(account=None):
             return {"status": "request_failed", "detail": str(e)[:200]}
 
 
+def account_plans():
+    """Every configured account and the plan it is on, in one browser trip.
+
+    Burrow asks this once on load to label its account switch. Separate from a
+    usage reading because it is a different question: which accounts exist and
+    what are they, rather than how much is left. One connection and one tab per
+    account, sequentially — the cookie jar is shared, so they cannot overlap.
+
+    One account failing does not fail the rest: each carries its own status.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise Unavailable("request_failed",
+                          "playwright is not installed — see Setup in the README")
+
+    store = load_accounts()
+    if not store:
+        return []
+
+    endpoint = ws_endpoint()
+    rows = []
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.connect_over_cdp(endpoint, timeout=30000)
+        except Exception as e:
+            raise Unavailable("browser_unavailable",
+                              f"{describe_browser()} — {str(e).splitlines()[0]}")
+        try:
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            previous = session_cookies(ctx)
+            try:
+                for account, entry in sorted(store.items()):
+                    row = {"account": account}
+                    try:
+                        install_account(ctx, entry)
+                        page = ctx.new_page()
+                        try:
+                            open_claude(page)
+                            r = page.evaluate("""async () => {
+                                const res = await fetch('/api/organizations',
+                                    {cache: 'no-store',
+                                     headers: {'Accept': 'application/json'}});
+                                return {status: res.status, body: await res.text()};
+                            }""")
+                            if r["status"] in (401, 403):
+                                raise Unavailable("unauthenticated",
+                                                  f"HTTP {r['status']}; log in again "
+                                                  f"and re-capture {account}")
+                            if r["status"] != 200:
+                                raise Unavailable("request_failed",
+                                                  f"HTTP {r['status']} from /api/organizations")
+                            orgs = [o for o in json.loads(r["body"])
+                                    if "chat" in (o.get("capabilities") or [])]
+                            if not orgs:
+                                raise Unavailable("request_failed",
+                                                  "no chat-capable organization")
+                            org = next((o for o in orgs
+                                        if o["uuid"] == entry.get("org_uuid")), orgs[0])
+                            if entry.get("org_uuids") and \
+                                    org["uuid"] not in entry["org_uuids"]:
+                                raise Unavailable(
+                                    "request_failed",
+                                    f"read organization {org['uuid']} but "
+                                    f"{account!r} is not it; session swap did not take")
+                            row.update(status="ok",
+                                       plan=org.get("analytics_subscription_plan"),
+                                       org_uuid=org["uuid"],
+                                       org_name=org.get("name"))
+                        finally:
+                            page.close()
+                    except Unavailable as e:
+                        row.update(e.payload)
+                    except Exception as e:
+                        row.update(status="request_failed", detail=str(e)[:200])
+                    rows.append(row)
+            finally:
+                install_account(ctx, {"cookies": previous})
+                try:
+                    recycle_idle_tabs(ctx)
+                except Exception:
+                    pass
+        finally:
+            browser.close()
+    return rows
+
+
+def read_plans():
+    """Return the plans digest. Always a dict; check its "status" field."""
+    hit = cached("__plans__")
+    if hit:
+        return hit
+
+    with one_at_a_time():
+        hit = cached("__plans__")
+        if hit:
+            return hit
+        try:
+            data = {"status": "ok", "accounts": account_plans()}
+            remember("__plans__", data)
+            return data
+        except Unavailable as e:
+            return e.payload
+        except Exception as e:
+            return {"status": "request_failed", "detail": str(e)[:200]}
+
+
 def capture_account(account):
     """Store the session the browser is signed into right now, under this id."""
     try:
@@ -782,6 +889,11 @@ def cli(argv):
 
     if "--accounts" in argv:
         return list_accounts()
+
+    if "--plans" in argv:
+        result = read_plans()
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] == "ok" else 1
 
     if "--capture-account" in argv:
         i = argv.index("--capture-account")

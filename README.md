@@ -142,6 +142,7 @@ will not overwrite a file it did not create.
 ./usage --capture-account <id>   # remember the account now signed in, under this id
 ./usage --accounts               # list captured accounts and when they expire
 ./usage --account <id>           # read that account instead of whoever is signed in
+./usage --plans                  # every configured account and its plan, in one pass
 ```
 
 On Windows, `usage` instead of `./usage`.
@@ -210,6 +211,29 @@ Every reading checks that the organisation it read matches the account asked
 for, and fails with `request_failed` if not. A session that silently failed to
 install would otherwise return the *previous* account's numbers under the
 requested name, which is worse than an error.
+
+### Listing the accounts and their plans
+
+`./usage --plans` answers "which accounts are set up, and what are they on" in a
+single pass:
+
+```json
+{
+  "status": "ok",
+  "accounts": [
+    { "account": "pro",  "status": "ok", "plan": "claude_max 5x",
+      "org_uuid": "...", "org_name": "..." },
+    { "account": "team", "status": "unauthenticated",
+      "detail": "HTTP 403; log in again and re-capture team" }
+  ]
+}
+```
+
+One browser connection for all of them rather than one process each, so it is
+quicker than calling `--account` per account, and the result is cached for 60
+seconds. Each account carries its own `status`: one expired session does not
+stop the others being reported, and the call still exits 0 as long as the
+browser could be reached.
 
 `accounts.json` holds live sessions. It is gitignored and readable only by you,
 but it is a credential file — the honest cost of not running one browser per
