@@ -382,7 +382,17 @@ def fetch(account=None):
                 if not chat:
                     raise Unavailable("request_failed",
                                       "no chat-capable organization on this account")
-                uuid = chat[0]["uuid"]
+                # An account can have more than one chat-capable organisation —
+                # a Team one and a free one, say — and taking whichever the API
+                # lists first means a reorder silently reads the other. Both
+                # belong to the account, so the check below would not catch it.
+                # Prefer the organisation this account was captured against.
+                org = None
+                if entry and entry.get("org_uuid"):
+                    org = next((o for o in chat
+                                if o["uuid"] == entry["org_uuid"]), None)
+                org = org or chat[0]
+                uuid = org["uuid"]
                 # The swap is the part that can fail quietly: if the cookies did
                 # not take, this reads the previous account and looks perfectly
                 # healthy. Refuse rather than attribute numbers to the wrong
@@ -392,7 +402,10 @@ def fetch(account=None):
                         "request_failed",
                         f"read organization {uuid} but account {account!r} is "
                         f"{', '.join(entry['org_uuids'])}; session swap did not take")
-                return api(f"/api/organizations/{uuid}/usage"), uuid
+                # Anthropic's own field, and an analytics one at that, so it
+                # may disappear without notice. Optional everywhere downstream.
+                return (api(f"/api/organizations/{uuid}/usage"), uuid,
+                        org.get("analytics_subscription_plan"))
 
             try:
                 try:
@@ -523,11 +536,12 @@ def read_usage(account=None):
         if hit:
             return hit
         try:
-            usage, org_uuid = fetch(account)
+            usage, org_uuid, plan = fetch(account)
             data = digest(usage)
             data["source"] = "browser"
             data["account"] = account
             data["org_uuid"] = org_uuid
+            data["plan"] = plan
             remember(account, data)
             return data
         except Unavailable as e:
@@ -569,18 +583,27 @@ def capture_account(account):
         finally:
             browser.close()
 
+    chat = [o for o in orgs if "chat" in (o.get("capabilities") or [])]
+    if not chat:
+        raise Unavailable("unauthenticated",
+                          "that account has no chat-capable organization")
     uuids = [o["uuid"] for o in orgs]
     names = [o.get("name", "?") for o in orgs]
+    pinned, plan = chat[0]["uuid"], chat[0].get("analytics_subscription_plan")
     store = load_accounts()
     clash = [a for a, e in store.items()
              if a != account and set(e["org_uuids"]) & set(uuids)]
     store[account] = {"org_uuids": uuids, "org_names": names,
+                      "org_uuid": pinned, "plan": plan,
                       "captured_at": int(time.time()), "cookies": cookies}
     save_accounts(store)
 
     print(f"Captured account {account!r}")
     for u, n in zip(uuids, names):
-        print(f"  {u}  {n}")
+        mark = "  <- readings use this one" if u == pinned else ""
+        print(f"  {u}  {n}{mark}")
+    if plan:
+        print(f"  plan: {plan}")
     expiries = [c.get("expires") for c in cookies if c.get("expires", -1) > 0]
     if expiries:
         days = (min(expiries) - time.time()) / 86400

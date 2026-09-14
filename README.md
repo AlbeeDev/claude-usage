@@ -202,6 +202,10 @@ How it works: each account's claude.ai session cookies are stored in
 cookies are left alone, so switching does not trigger a fresh challenge. Only
 one browser is needed no matter how many accounts you have.
 
+An account can own more than one chat-capable organisation — a Team one and a
+free one, say. The organisation is pinned when the account is captured, so
+readings keep using the same one rather than whichever the API lists first.
+
 Every reading checks that the organisation it read matches the account asked
 for, and fails with `request_failed` if not. A session that silently failed to
 install would otherwise return the *previous* account's numbers under the
@@ -226,9 +230,16 @@ account. Sessions expire roughly monthly; `./usage --accounts` shows when.
 | `source` | Always `browser` |
 | `account` | The account id asked for, or `null` |
 | `org_uuid` | Which organisation the numbers are for |
+| `plan` | The account's plan, e.g. `claude_max 5x`, or `null` |
 
 `blocking` can name a model that is exhausted while both percentages still look
 healthy.
+
+The percentages are relative to the account's current limits, so a plan change
+is invisible in them — an upgrade makes the same work report a *smaller* number.
+`plan` is what makes that visible. It is Anthropic's own `analytics_subscription_plan`,
+undocumented and passed through untouched, so treat it as an opaque label that may
+be `null`.
 
 ## Failure statuses
 
