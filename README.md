@@ -307,6 +307,10 @@ USAGE_CDP_URL=http://other-host:9222 ./usage
   with debugging enabled can be driven by anything else on the machine.
 - Closing the browser does not lose the login — it is on disk. `./usage` starts
   it again.
+- Tabs this tool opens are stamped, so a run that is killed before it can clean
+  up is tidied by the next one. Without that, the tab it left behind is
+  indistinguishable from one you opened: it gets borrowed, borrowed tabs are
+  never closed, and every later reading reuses the same page forever.
 - The idle tab that keeps the browser alive is replaced once its heap passes
   `USAGE_IDLE_TAB_MAX_MB`. A replacement opens before the old one closes, so the
   tab count never reaches zero and the browser never restarts — but the old

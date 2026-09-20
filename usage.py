@@ -38,6 +38,10 @@ ACCOUNTS = HERE / "accounts.json"
 CACHE_TTL = 60          # seconds; several callers may check at once
 CHALLENGE_TIMEOUT = 60  # seconds to let Cloudflare clear
 IDLE_TAB_MAX_MB = int(os.environ.get("USAGE_IDLE_TAB_MAX_MB", "250"))
+# Stamped on tabs this opens, so a later run can tell its own litter from a
+# tab a person opened. window.name survives same-origin navigation, which a
+# variable would not.
+TAB_MARK = "claude-usage-reader"
 
 
 class Unavailable(Exception):
@@ -264,24 +268,28 @@ def recycle_idle_tabs(ctx):
     Idle tabs only. A claude.ai tab belongs to whoever opened it.
     """
     idle = [pg for pg in ctx.pages if not pg.url.startswith("https://claude.ai")]
-    bloated = []
+    bloated, healthy = [], []
     for pg in idle:
         try:
             mb = (pg.evaluate("() => (performance.memory || {}).usedJSHeapSize || 0")
                   or 0) / 1048576
         except Exception:
+            healthy.append(pg)  # unreadable, so leave it be
             continue
-        if mb >= IDLE_TAB_MAX_MB:
-            bloated.append(pg)
+        (bloated if mb >= IDLE_TAB_MAX_MB else healthy).append(pg)
 
     if not bloated:
         return 0
 
-    fresh = ctx.new_page()  # up first, so the count never touches zero
-    try:
-        fresh.goto("about:blank", timeout=15000)
-    except Exception:
-        pass
+    # Only open a replacement if closing these would leave nothing behind.
+    # Adding one unconditionally is how a second blank tab appears and stays.
+    if not healthy:
+        fresh = ctx.new_page()
+        try:
+            fresh.goto("about:blank", timeout=15000)
+        except Exception:
+            pass
+
     closed = 0
     for pg in bloated:
         try:
@@ -289,6 +297,31 @@ def recycle_idle_tabs(ctx):
             closed += 1
         except Exception:
             pass
+    return closed
+
+
+def sweep_our_tabs(ctx):
+    """Close claude.ai tabs this tool left behind on an earlier run.
+
+    A reading closes its tab on the way out, but a process that is killed cannot.
+    The tab it leaves looks exactly like one a person opened, so the next reading
+    borrows it — and a borrowed tab is deliberately never closed. One interrupted
+    reading therefore turns every later one back into reuse-forever, which is the
+    growth this was supposed to have ended: found at 2.4GB in a tab six days old.
+
+    Hence the mark. Ours get closed, a person's is left alone.
+    """
+    closed = 0
+    for pg in list(ctx.pages):
+        if not pg.url.startswith("https://claude.ai"):
+            continue
+        try:
+            if pg.evaluate("() => window.name") != TAB_MARK:
+                continue
+            pg.close()
+            closed += 1
+        except Exception:
+            continue
     return closed
 
 
@@ -352,6 +385,13 @@ def fetch(account=None):
                 previous = session_cookies(ctx)
                 install_account(ctx, entry)
 
+            # Anything of ours still open is litter from a run that was killed.
+            # Clear it first, or it gets borrowed below and never closed again.
+            try:
+                sweep_our_tabs(ctx)
+            except Exception:
+                pass
+
             # Borrow a claude.ai tab if one is already open — someone is using
             # that browser, and opening a second tab would pull their window to
             # the front. Otherwise open one, which we then own and close. With an
@@ -363,6 +403,10 @@ def fetch(account=None):
             if ours:
                 page = ctx.new_page()
                 open_claude(page)
+                try:
+                    page.evaluate(f"() => {{ window.name = {TAB_MARK!r}; }}")
+                except Exception:
+                    pass
 
             def api(path):
                 r = page.evaluate(
