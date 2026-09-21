@@ -221,6 +221,22 @@ COOKIE_FIELDS = ("name", "value", "domain", "path", "expires", "httpOnly",
                  "secure", "sameSite")
 
 
+def session_days_left(cookies):
+    """Days until the earliest session cookie expires, or None if unknowable.
+
+    Reported alongside the numbers so a session can be renewed while that is
+    still a two-minute login rather than an outage. Readings refresh the stored
+    copy, so this only runs down when nothing is asking — a machine off for a
+    month, or a provider nobody polls.
+    """
+    expiries = [c["expires"] for c in cookies
+                if c.get("name", "").startswith(SESSION_PREFIX)
+                and isinstance(c.get("expires"), (int, float)) and c["expires"] > 0]
+    if not expiries:
+        return None
+    return round((min(expiries) - time.time()) / 86400, 1)
+
+
 def is_session_cookie(name):
     return name.startswith(SESSION_PREFIX) or name in SESSION_ALSO
 
@@ -449,7 +465,8 @@ def fetch(account=None):
                 # Anthropic's own field, and an analytics one at that, so it
                 # may disappear without notice. Optional everywhere downstream.
                 return (api(f"/api/organizations/{uuid}/usage"), uuid,
-                        org.get("analytics_subscription_plan"))
+                        org.get("analytics_subscription_plan"),
+                        session_days_left(session_cookies(ctx)))
 
             def refresh_stored_session():
                 """Save the session as it stands now, expiry and all.
@@ -610,12 +627,13 @@ def read_usage(account=None):
         if hit:
             return hit
         try:
-            usage, org_uuid, plan = fetch(account)
+            usage, org_uuid, plan, days_left = fetch(account)
             data = digest(usage)
             data["source"] = "browser"
             data["account"] = account
             data["org_uuid"] = org_uuid
             data["plan"] = plan
+            data["session_expires_in_days"] = days_left
             remember(account, data)
             return data
         except Unavailable as e:
@@ -692,7 +710,9 @@ def account_plans():
                             row.update(status="ok",
                                        plan=org.get("analytics_subscription_plan"),
                                        org_uuid=org["uuid"],
-                                       org_name=org.get("name"))
+                                       org_name=org.get("name"),
+                                       session_expires_in_days=session_days_left(
+                                           session_cookies(ctx)))
                         finally:
                             page.close()
                     except Unavailable as e:

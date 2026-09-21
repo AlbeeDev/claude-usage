@@ -235,6 +235,10 @@ seconds. Each account carries its own `status`: one expired session does not
 stop the others being reported, and the call still exits 0 as long as the
 browser could be reached.
 
+Every reading reports `session_expires_in_days`, so a session can be renewed
+while that is still a two-minute login rather than an outage. Surface it below a
+week or so.
+
 A stored session is re-saved after every successful reading, so it rolls forward
 with the real one instead of ageing out. Without that an account died a fixed
 number of days after capture no matter how often it was read: the stored cookie
@@ -261,6 +265,7 @@ account. Sessions expire roughly monthly; `./usage --accounts` shows when.
 | `account` | The account id asked for, or `null` |
 | `org_uuid` | Which organisation the numbers are for |
 | `plan` | The account's plan, e.g. `claude_max 5x`, or `null` |
+| `session_expires_in_days` | Days until the login needs redoing, or `null` |
 
 `blocking` can name a model that is exhausted while both percentages still look
 healthy.

@@ -9,6 +9,7 @@ Nothing here touches a browser or the network. Run with pytest, or directly:
 import io
 import json
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -117,6 +118,21 @@ def test_session_cookies_are_recognised_by_name():
         assert usage.is_session_cookie(name), name
     for name in ("cf_clearance", "__cf_bm", "_cfuvid", "anthropic-device-id"):
         assert not usage.is_session_cookie(name), name
+
+
+def test_session_days_left():
+    # Reported so a session can be renewed while that is still a login rather
+    # than an outage, so it has to cope with what the browser actually hands
+    # back: session cookies with no expiry at all, and a mix of the two.
+    soon = time.time() + 3 * 86400
+    later = time.time() + 20 * 86400
+    assert usage.session_days_left([]) is None
+    assert usage.session_days_left([{"name": "sessionKey", "expires": -1}]) is None
+    assert usage.session_days_left([{"name": "lastActiveOrg", "expires": soon}]) is None
+    assert usage.session_days_left([{"name": "sessionKey", "expires": later},
+                                    {"name": "sessionKeyV3", "expires": soon}]) == 3.0
+    assert usage.session_days_left([{"name": "sessionKey", "expires": soon},
+                                    {"name": "lastActiveOrg", "expires": -1}]) == 3.0
 
 
 if __name__ == "__main__":
