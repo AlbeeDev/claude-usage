@@ -451,9 +451,39 @@ def fetch(account=None):
                 return (api(f"/api/organizations/{uuid}/usage"), uuid,
                         org.get("analytics_subscription_plan"))
 
+            def refresh_stored_session():
+                """Save the session as it stands now, expiry and all.
+
+                A stored cookie keeps the `expires` it had when captured, while
+                the live one is extended by the server every time it is used.
+                Once that original date passes, installing the stored copy sets
+                an already-expired cookie — which the browser discards without a
+                word, so the account dies exactly N days after capture however
+                often it was read. Seen on 2026-09-21: the stored value was
+                byte-identical to the working live one and still failed.
+
+                Re-saving after a successful reading rolls the stored copy
+                forward with the real one, and picks up cookies the site has
+                started issuing since.
+                """
+                fresh = session_cookies(ctx)
+                if not any(c["name"].startswith(SESSION_PREFIX) for c in fresh):
+                    return
+                store = load_accounts()
+                if account in store:
+                    store[account]["cookies"] = fresh
+                    store[account]["refreshed_at"] = int(time.time())
+                    save_accounts(store)
+
             try:
                 try:
-                    return read()
+                    result = read()
+                    if entry:
+                        try:
+                            refresh_stored_session()
+                        except Exception:
+                            pass
+                    return result
                 except Unavailable:
                     if ours:
                         raise

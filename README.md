@@ -235,6 +235,12 @@ seconds. Each account carries its own `status`: one expired session does not
 stop the others being reported, and the call still exits 0 as long as the
 browser could be reached.
 
+A stored session is re-saved after every successful reading, so it rolls forward
+with the real one instead of ageing out. Without that an account died a fixed
+number of days after capture no matter how often it was read: the stored cookie
+keeps the expiry it had when captured, while the live one is extended by the
+site on use, and installing an expired cookie is silently a no-op.
+
 `accounts.json` holds live sessions. It is gitignored and readable only by you,
 but it is a credential file — the honest cost of not running one browser per
 account. Sessions expire roughly monthly; `./usage --accounts` shows when.
